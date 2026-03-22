@@ -37,8 +37,15 @@ func Run(ctx context.Context, _ []string, stdout, _ io.Writer) error {
 
 	port := envOrDefault("PORT", "8080")
 
-	apiKeys := strings.Split(envOrDefault("API_KEYS", ""), ",")
-	if len(apiKeys) == 0 || apiKeys[0] == "" {
+	rawKeys := strings.Split(envOrDefault("API_KEYS", ""), ",")
+	var apiKeys []string
+	for _, k := range rawKeys {
+		k = strings.TrimSpace(k)
+		if k != "" {
+			apiKeys = append(apiKeys, k)
+		}
+	}
+	if len(apiKeys) == 0 {
 		return fmt.Errorf("API_KEYS environment variable required")
 	}
 
