@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Seed the Spanner emulator with demo carriers and appetite rules.
+# Requires: SPANNER_EMULATOR_HOST set (e.g., localhost:9010)
+
+export SPANNER_EMULATOR_HOST="${SPANNER_EMULATOR_HOST:-localhost:9010}"
+PROJECT="riskforge-dev"
+INSTANCE="test-instance"
+DB="test-db"
+
+echo "Seeding Spanner emulator at $SPANNER_EMULATOR_HOST..."
+
+# Use gcloud to execute DML
+gcloud config configurations create emulator 2>/dev/null || true
+gcloud config set auth/disable_credentials true
+gcloud config set project "$PROJECT"
+gcloud config set api_endpoint_overrides/spanner "http://${SPANNER_EMULATOR_HOST%:9010}:9020/"
+
+gcloud spanner databases execute-sql "$DB" --instance="$INSTANCE" --sql="
+INSERT INTO Carriers (CarrierId, Name, Code, IsActive, CreatedAt, UpdatedAt, Config)
+VALUES
+  ('carrier-alpha', 'Alpha Insurance', 'ALPHA', true, PENDING_COMMIT_TIMESTAMP(), PENDING_COMMIT_TIMESTAMP(),
+   JSON '{\"TimeoutHint\":\"100ms\",\"FailureThreshold\":5,\"SuccessThreshold\":2,\"OpenTimeout\":\"30s\",\"HedgeMultiplier\":1.5,\"EMAWindowSize\":19,\"EMAWarmupObservations\":10,\"Priority\":1,\"RateLimit\":{\"TokensPerSecond\":100,\"Burst\":10}}'),
+  ('carrier-beta', 'Beta Insurance', 'BETA', true, PENDING_COMMIT_TIMESTAMP(), PENDING_COMMIT_TIMESTAMP(),
+   JSON '{\"TimeoutHint\":\"200ms\",\"FailureThreshold\":5,\"SuccessThreshold\":2,\"OpenTimeout\":\"30s\",\"HedgeMultiplier\":1.5,\"EMAWindowSize\":19,\"EMAWarmupObservations\":10,\"Priority\":2,\"RateLimit\":{\"TokensPerSecond\":50,\"Burst\":5}}'),
+  ('carrier-gamma', 'Gamma Insurance', 'GAMMA', true, PENDING_COMMIT_TIMESTAMP(), PENDING_COMMIT_TIMESTAMP(),
+   JSON '{\"TimeoutHint\":\"800ms\",\"FailureThreshold\":5,\"SuccessThreshold\":2,\"OpenTimeout\":\"30s\",\"HedgeMultiplier\":1.5,\"EMAWindowSize\":19,\"EMAWarmupObservations\":10,\"Priority\":3,\"RateLimit\":{\"TokensPerSecond\":100,\"Burst\":10}}')
+"
+
+gcloud spanner databases execute-sql "$DB" --instance="$INSTANCE" --sql="
+INSERT INTO AppetiteRules (RuleId, CarrierId, State, LineOfBusiness, MinPremium, MaxPremium, IsActive, CreatedAt)
+VALUES
+  ('rule-1', 'carrier-alpha', 'CA', 'auto', 500, 100000, true, PENDING_COMMIT_TIMESTAMP()),
+  ('rule-2', 'carrier-alpha', 'CA', 'homeowners', 1000, 500000, true, PENDING_COMMIT_TIMESTAMP()),
+  ('rule-3', 'carrier-alpha', 'TX', 'auto', 500, 80000, true, PENDING_COMMIT_TIMESTAMP()),
+  ('rule-4', 'carrier-beta', 'CA', 'auto', 1000, 200000, true, PENDING_COMMIT_TIMESTAMP()),
+  ('rule-5', 'carrier-beta', 'CA', 'homeowners', 2000, 1000000, true, PENDING_COMMIT_TIMESTAMP()),
+  ('rule-6', 'carrier-beta', 'CA', 'umbrella', 5000, 500000, true, PENDING_COMMIT_TIMESTAMP()),
+  ('rule-7', 'carrier-beta', 'NY', 'auto', 2000, 150000, true, PENDING_COMMIT_TIMESTAMP()),
+  ('rule-8', 'carrier-gamma', 'CA', 'homeowners', 5000, 2000000, true, PENDING_COMMIT_TIMESTAMP()),
+  ('rule-9', 'carrier-gamma', 'CA', 'umbrella', 10000, 1000000, true, PENDING_COMMIT_TIMESTAMP()),
+  ('rule-10', 'carrier-gamma', 'FL', 'homeowners', 10000, 500000, true, PENDING_COMMIT_TIMESTAMP())
+"
+
+echo "Seed complete: 3 carriers, 10 appetite rules"

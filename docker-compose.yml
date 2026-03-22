@@ -1,0 +1,75 @@
+services:
+  spanner-emulator:
+    image: gcr.io/cloud-spanner-emulator/emulator:latest
+    ports:
+      - "9010:9010"
+      - "9020:9020"
+
+  spanner-init:
+    image: gcr.io/google.com/cloudsdktool/google-cloud-cli:slim
+    depends_on:
+      - spanner-emulator
+    environment:
+      SPANNER_EMULATOR_HOST: spanner-emulator:9010
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        sleep 2
+        gcloud config configurations create emulator 2>/dev/null || true
+        gcloud config set auth/disable_credentials true
+        gcloud config set project riskforge-dev
+        gcloud config set api_endpoint_overrides/spanner http://spanner-emulator:9020/
+        gcloud spanner instances create test-instance \
+          --config=emulator-config --description="Test" --nodes=1
+        gcloud spanner databases create test-db \
+          --instance=test-instance \
+          --ddl='CREATE TABLE Carriers (
+            CarrierId STRING(36) NOT NULL DEFAULT (GENERATE_UUID()),
+            Name STRING(255) NOT NULL,
+            Code STRING(50) NOT NULL,
+            IsActive BOOL NOT NULL DEFAULT (true),
+            CreatedAt TIMESTAMP NOT NULL OPTIONS (allow_commit_timestamp = true),
+            UpdatedAt TIMESTAMP NOT NULL OPTIONS (allow_commit_timestamp = true),
+            Config JSON
+          ) PRIMARY KEY (CarrierId)' \
+          --ddl='CREATE TABLE AppetiteRules (
+            RuleId STRING(36) NOT NULL DEFAULT (GENERATE_UUID()),
+            CarrierId STRING(36) NOT NULL,
+            State STRING(2) NOT NULL,
+            LineOfBusiness STRING(100) NOT NULL,
+            ClassCode STRING(50),
+            MinPremium FLOAT64,
+            MaxPremium FLOAT64,
+            IsActive BOOL NOT NULL DEFAULT (true),
+            EligibilityCriteria JSON,
+            CreatedAt TIMESTAMP NOT NULL OPTIONS (allow_commit_timestamp = true)
+          ) PRIMARY KEY (CarrierId, RuleId), INTERLEAVE IN PARENT Carriers ON DELETE CASCADE' \
+          --ddl='CREATE TABLE Quotes (
+            RequestID STRING(256) NOT NULL,
+            CarrierID STRING(36) NOT NULL,
+            PremiumCents INT64 NOT NULL,
+            Currency STRING(3) NOT NULL DEFAULT ('"'"'USD'"'"'),
+            ExpiresAt TIMESTAMP NOT NULL,
+            IsHedged BOOL NOT NULL DEFAULT (false),
+            LatencyMs INT64 NOT NULL,
+            CarrierRef STRING(256),
+            CreatedAt TIMESTAMP NOT NULL OPTIONS (allow_commit_timestamp = true)
+          ) PRIMARY KEY (RequestID, CarrierID)' \
+          --ddl='CREATE INDEX QuotesByExpiry ON Quotes (ExpiresAt)'
+        echo "=== Spanner emulator ready ==="
+
+  api:
+    build: .
+    ports:
+      - "8080:8080"
+    depends_on:
+      spanner-init:
+        condition: service_completed_successfully
+    environment:
+      PORT: "8080"
+      API_KEYS: "dev-key-for-local-testing-only-32chars"
+      SPANNER_EMULATOR_HOST: spanner-emulator:9010
+      SPANNER_PROJECT: riskforge-dev
+      SPANNER_INSTANCE: test-instance
+      SPANNER_DATABASE: test-db
