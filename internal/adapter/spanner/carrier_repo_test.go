@@ -4,7 +4,6 @@ package spanner
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
@@ -16,20 +15,23 @@ func TestCarrierRepo_ListActive_ReturnsActive(t *testing.T) {
 	repo := NewCarrierRepo(client)
 	ctx := context.Background()
 
-	prefix := fmt.Sprintf("carrier-%s", t.Name())
+	base := shortID(t)
+	id1 := base[:14] + "-a1"
+	id2 := base[:14] + "-a2"
+	id3 := base[:14] + "-in"
 	cols := []string{"CarrierId", "Name", "Code", "IsActive", "CreatedAt", "UpdatedAt", "Config"}
 
 	mutations := []*spanner.Mutation{
 		spanner.InsertOrUpdate("Carriers", cols, []interface{}{
-			prefix + "-active1", "Active One", "ACT1", true,
+			id1, "Active One", "ACT1", true,
 			spanner.CommitTimestamp, spanner.CommitTimestamp, spanner.NullJSON{},
 		}),
 		spanner.InsertOrUpdate("Carriers", cols, []interface{}{
-			prefix + "-active2", "Active Two", "ACT2", true,
+			id2, "Active Two", "ACT2", true,
 			spanner.CommitTimestamp, spanner.CommitTimestamp, spanner.NullJSON{},
 		}),
 		spanner.InsertOrUpdate("Carriers", cols, []interface{}{
-			prefix + "-inactive", "Inactive One", "INACT", false,
+			id3, "Inactive One", "INACT", false,
 			spanner.CommitTimestamp, spanner.CommitTimestamp, spanner.NullJSON{},
 		}),
 	}
@@ -47,9 +49,9 @@ func TestCarrierRepo_ListActive_ReturnsActive(t *testing.T) {
 	inactiveFound := false
 	for _, c := range carriers {
 		switch c.ID {
-		case prefix + "-active1", prefix + "-active2":
+		case id1, id2:
 			activeCount++
-		case prefix + "-inactive":
+		case id3:
 			inactiveFound = true
 		}
 	}
@@ -67,7 +69,7 @@ func TestCarrierRepo_ListActive_DecodesConfig(t *testing.T) {
 	repo := NewCarrierRepo(client)
 	ctx := context.Background()
 
-	carrierID := fmt.Sprintf("carrier-%s", t.Name())
+	carrierID := shortID(t)
 	cols := []string{"CarrierId", "Name", "Code", "IsActive", "CreatedAt", "UpdatedAt", "Config"}
 
 	configJSON := spanner.NullJSON{
@@ -124,7 +126,7 @@ func TestCarrierRepo_ListActive_NullConfig(t *testing.T) {
 	repo := NewCarrierRepo(client)
 	ctx := context.Background()
 
-	carrierID := fmt.Sprintf("carrier-%s", t.Name())
+	carrierID := shortID(t)
 	cols := []string{"CarrierId", "Name", "Code", "IsActive", "CreatedAt", "UpdatedAt", "Config"}
 
 	m := spanner.InsertOrUpdate("Carriers", cols, []interface{}{

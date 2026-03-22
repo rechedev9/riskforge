@@ -4,7 +4,6 @@ package spanner
 
 import (
 	"context"
-	"fmt"
 	"testing"
 
 	"cloud.google.com/go/spanner"
@@ -31,7 +30,7 @@ func TestAppetiteRepo_FindMatchingRules_RequiredOnly(t *testing.T) {
 	repo := NewAppetiteRepo(client)
 	ctx := context.Background()
 
-	carrierID := fmt.Sprintf("carrier-%s", t.Name())
+	carrierID := shortID(t)
 	insertParentCarrier(t, client, carrierID)
 
 	cols := []string{"CarrierId", "RuleId", "State", "LineOfBusiness", "ClassCode", "MinPremium", "MaxPremium", "IsActive", "CreatedAt"}
@@ -71,7 +70,7 @@ func TestAppetiteRepo_FindMatchingRules_WithClassCode(t *testing.T) {
 	repo := NewAppetiteRepo(client)
 	ctx := context.Background()
 
-	carrierID := fmt.Sprintf("carrier-%s", t.Name())
+	carrierID := shortID(t)
 	insertParentCarrier(t, client, carrierID)
 
 	cols := []string{"CarrierId", "RuleId", "State", "LineOfBusiness", "ClassCode", "MinPremium", "MaxPremium", "IsActive", "CreatedAt"}
@@ -113,7 +112,7 @@ func TestAppetiteRepo_FindMatchingRules_PremiumRange(t *testing.T) {
 	repo := NewAppetiteRepo(client)
 	ctx := context.Background()
 
-	carrierID := fmt.Sprintf("carrier-%s", t.Name())
+	carrierID := shortID(t)
 	insertParentCarrier(t, client, carrierID)
 
 	cols := []string{"CarrierId", "RuleId", "State", "LineOfBusiness", "ClassCode", "MinPremium", "MaxPremium", "IsActive", "CreatedAt"}
@@ -177,10 +176,10 @@ func TestAppetiteRepo_ListAll(t *testing.T) {
 	repo := NewAppetiteRepo(client)
 	ctx := context.Background()
 
-	prefix := fmt.Sprintf("carrier-%s", t.Name())
 	// Insert 3 rules across 2 parent carriers.
-	carrier1 := prefix + "-c1"
-	carrier2 := prefix + "-c2"
+	base := shortID(t)
+	carrier1 := base[:15] + "-c1"
+	carrier2 := base[:15] + "-c2"
 	insertParentCarrier(t, client, carrier1)
 	insertParentCarrier(t, client, carrier2)
 

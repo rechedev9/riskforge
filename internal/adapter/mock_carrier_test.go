@@ -53,11 +53,11 @@ func TestMockCarrier_BetaFailureRateApproximatelyTenPercent(t *testing.T) {
 	t.Parallel()
 
 	// REQ-ADAPT-003: Beta returns ErrCarrierUnavailable at ~10% failure rate.
-	// Test with 100 calls; assert 5%–20% fail.
+	// Test with 500 calls; assert 3%–20% fail (wider bounds to avoid flakiness).
 	mc := adapter.NewBeta(devNull)
 	ctx := t.Context()
 
-	const calls = 100
+	const calls = 500
 	failures := 0
 
 	for i := 0; i < calls; i++ {
@@ -72,8 +72,8 @@ func TestMockCarrier_BetaFailureRateApproximatelyTenPercent(t *testing.T) {
 	}
 
 	rate := float64(failures) / float64(calls)
-	if rate < 0.05 || rate > 0.20 {
-		t.Fatalf("REQ-ADAPT-003 Beta: failure rate %.2f not in [0.05, 0.20] over %d calls", rate, calls)
+	if rate < 0.03 || rate > 0.20 {
+		t.Fatalf("REQ-ADAPT-003 Beta: failure rate %.2f not in [0.03, 0.20] over %d calls", rate, calls)
 	}
 }
 

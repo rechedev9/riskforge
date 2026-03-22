@@ -4,11 +4,21 @@ package spanner
 
 import (
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"os"
 	"testing"
 
 	"cloud.google.com/go/spanner"
 )
+
+// shortID returns a deterministic, unique ID that fits within STRING(36).
+// It hashes the test name to produce a 32-char hex string.
+func shortID(t *testing.T) string {
+	t.Helper()
+	h := sha256.Sum256([]byte(t.Name()))
+	return fmt.Sprintf("%x", h[:16])
+}
 
 func newEmulatorClient(t *testing.T) *spanner.Client {
 	t.Helper()
