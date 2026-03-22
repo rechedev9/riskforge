@@ -8,6 +8,7 @@ import (
 	"context"
 	"log/slog"
 	"math"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -82,7 +83,8 @@ func (t *EMATracker) Record(latency time.Duration) {
 			t.metrics.SetP95Latency(t.carrierID, newP95)
 			return
 		}
-		// Another goroutine updated first — retry with the fresh state.
+		// Another goroutine updated first — yield before retry.
+		runtime.Gosched()
 	}
 }
 
