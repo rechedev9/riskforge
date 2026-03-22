@@ -23,3 +23,21 @@ variable "enable_alerts" {
   default     = true
   description = "Enable alert policies and uptime checks (disable for dev to reduce noise)"
 }
+
+variable "worker_service_name" {
+  type        = string
+  default     = ""
+  description = "Cloud Run Worker service name for alert filters. Leave empty to disable worker alerts."
+}
+
+variable "worker_service_url" {
+  type        = string
+  default     = ""
+  description = "Cloud Run Worker service URL. Required when worker_service_name is set."
+}
+
+variable "pubsub_subscription_name" {
+  type        = string
+  default     = ""
+  description = "Pub/Sub push subscription name for DLQ backlog alert. Leave empty to disable."
+}
