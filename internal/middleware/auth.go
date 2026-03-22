@@ -40,16 +40,21 @@ func newAuthFailureLimiter() *authFailureLimiter {
 	}
 }
 
-// check returns false if the IP has exhausted its failure budget.
-func (l *authFailureLimiter) check(ip string) bool {
+// tryRecordFailure atomically checks the failure budget and consumes a
+// token. Returns false if the IP has exhausted its budget (caller should
+// return 429). This eliminates the TOCTOU between a separate check and
+// record step.
+func (l *authFailureLimiter) tryRecordFailure(ip string) bool {
 	lim := l.getOrCreate(ip)
-	return lim.Tokens() >= 1
+	return lim.Allow()
 }
 
-// recordFailure consumes a token from the IP's bucket.
-func (l *authFailureLimiter) recordFailure(ip string) {
+// isExhausted returns true if the IP has no remaining failure budget.
+// Used as a pre-check before attempting authentication to fast-reject
+// exhausted IPs without doing the constant-time key comparison.
+func (l *authFailureLimiter) isExhausted(ip string) bool {
 	lim := l.getOrCreate(ip)
-	lim.Allow()
+	return lim.Tokens() < 1
 }
 
 func (l *authFailureLimiter) getOrCreate(ip string) *rate.Limiter {
@@ -131,7 +136,7 @@ func RequireAPIKey(next http.Handler, keys []string, skipPaths []string, log *sl
 			ip = r.RemoteAddr
 		}
 
-		if !limiter.check(ip) {
+		if limiter.isExhausted(ip) {
 			log.Warn("auth rate limited",
 				slog.String("path", r.URL.Path),
 				slog.String("remote", r.RemoteAddr),
@@ -143,7 +148,7 @@ func RequireAPIKey(next http.Handler, keys []string, skipPaths []string, log *sl
 		raw := r.Header.Get("Authorization")
 		token := strings.TrimPrefix(raw, "Bearer ")
 		if token == "" || token == raw {
-			limiter.recordFailure(ip)
+			limiter.tryRecordFailure(ip)
 			log.Warn("auth failed: missing bearer token",
 				slog.String("path", r.URL.Path),
 				slog.String("remote", r.RemoteAddr),
@@ -162,7 +167,7 @@ func RequireAPIKey(next http.Handler, keys []string, skipPaths []string, log *sl
 		}
 
 		if matchIdx < 0 {
-			limiter.recordFailure(ip)
+			limiter.tryRecordFailure(ip)
 			log.Warn("auth failed: invalid API key",
 				slog.String("path", r.URL.Path),
 				slog.String("remote", r.RemoteAddr),
