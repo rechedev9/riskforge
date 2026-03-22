@@ -45,3 +45,37 @@ jobs:
         run: |
           COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | sed 's/%//')
           echo "Total coverage: ${COVERAGE}%"
+
+  integration-tests:
+    name: Integration Tests (Spanner Emulator)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Start Spanner emulator
+        run: docker compose up -d spanner-emulator spanner-init
+
+      - name: Wait for emulator ready
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:9020/v1/projects/riskforge-dev/instances/test-instance/databases/test-db 2>/dev/null; then
+              echo "Spanner emulator ready"
+              break
+            fi
+            echo "Waiting for emulator... ($i/30)"
+            sleep 2
+          done
+
+      - name: Run integration tests
+        env:
+          SPANNER_EMULATOR_HOST: localhost:9010
+          SPANNER_PROJECT: riskforge-dev
+          SPANNER_INSTANCE: test-instance
+          SPANNER_DATABASE: test-db
+        run: go test -tags integration -race -count=1 -v ./internal/adapter/spanner/...
