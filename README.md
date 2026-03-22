@@ -1,6 +1,8 @@
 <p align="center">
-  <h1 align="center">riskforge — GCP Infrastructure for Insurtech</h1>
+  <img src="assets/banner.png" alt="RISKFORGE — GCP Infrastructure for Insurtech" width="720">
 </p>
+
+<h1 align="center">riskforge — GCP Infrastructure for Insurtech</h1>
 
 <p align="center">
   <strong>Production-grade Terraform modules for Cloud Run + Spanner + Pub/Sub.<br>Built to demonstrate GCP, Go, and IaC competency for insurance technology platforms.</strong>
