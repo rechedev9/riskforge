@@ -32,11 +32,15 @@ Thumbs.db
 !.env.example
 
 # Terraform
-terraform/.terraform/
-terraform/*.tfstate
-terraform/*.tfstate.*
-terraform/*.tfplan
-terraform/.terraform.lock.hcl
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+
+# SDD cache
+openspec/.cache/
+openspec/changes/*/.cache/
+openspec/changes/*/.pending/
 
 # Build
 dist/

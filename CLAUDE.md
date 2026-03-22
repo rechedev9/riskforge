@@ -19,13 +19,21 @@
 - Lint: `staticcheck ./...` (if installed)
 
 ## Architecture
-- `cmd/api/` — Cloud Run HTTP server; REST API for appetite matching.
-- `cmd/worker/` — Pub/Sub subscriber; async event processing.
-- `internal/domain/` — Domain models: Carrier, AppetiteRule, RiskClassification, MatchResult.
-- `internal/service/` — Business logic: matching engine, AI classification.
-- `internal/adapter/` — Driven ports: Spanner repository, Pub/Sub publisher, Claude client.
-- `internal/handler/` — HTTP handlers (driving port).
-- `terraform/` — IaC: Cloud Run, Spanner, Pub/Sub, IAM, Monitoring.
+- `cmd/api/` — Thin shell entry point (14 lines); delegates to internal/cli.
+- `internal/cli/` — Server wiring, Spanner connection, signal handling.
+- `internal/domain/` — Carrier, Quote, AppetiteRule, Money, CoverageLine, errors (zero deps).
+- `internal/ports/` — Interfaces: CarrierPort, OrchestratorPort, QuoteRepository, AppetiteRepository.
+- `internal/adapter/` — Mock carriers, HTTP carrier, generic adapter registry.
+- `internal/adapter/spanner/` — QuoteRepo, CarrierRepo, AppetiteRepo (Spanner client).
+- `internal/orchestrator/` — Fan-out, singleflight dedup, adaptive hedging (EMA p95).
+- `internal/circuitbreaker/` — 3-state machine (Closed/Open/HalfOpen), atomic ops.
+- `internal/ratelimiter/` — Token bucket via x/time/rate.
+- `internal/handler/` — HTTP handler (POST /quotes, /healthz, /readyz, /metrics).
+- `internal/middleware/` — API key auth, security headers, concurrency limiter, audit.
+- `internal/metrics/` — Prometheus recorder (gauges, histograms, counters).
+- `internal/cleanup/` — Background expired quote cleanup ticker.
+- `terraform/` — 8 IaC modules: Cloud Run, Spanner, Pub/Sub, IAM, Networking, Monitoring, Storage, KMS.
+- `cmd/worker/` — Planned (not yet implemented); Pub/Sub subscriber for async event processing.
 
 ## Session Continuity
 - `/handoff`: read `docs/handoff.md` — dump state for next session.
