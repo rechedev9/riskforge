@@ -22,7 +22,7 @@ func NewCarrierRepo(client *spanner.Client) *CarrierRepo {
 
 func (r *CarrierRepo) ListActive(ctx context.Context) ([]domain.Carrier, error) {
 	stmt := spanner.Statement{
-		SQL: `SELECT CarrierId, Name, Code, Config FROM Carriers WHERE IsActive = true`,
+		SQL: `SELECT CarrierId, Name, Code, Config FROM Carriers WHERE IsActive = true LIMIT 10000`,
 	}
 	iter := r.client.Single().Query(ctx, stmt)
 	defer iter.Stop()

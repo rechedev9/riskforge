@@ -51,7 +51,8 @@ func (r *QuoteRepo) FindByRequestID(ctx context.Context, requestID string) ([]do
 		SQL: `SELECT CarrierID, PremiumCents, Currency, ExpiresAt, IsHedged, LatencyMs, CarrierRef
 		      FROM Quotes
 		      WHERE RequestID = @requestID AND ExpiresAt > CURRENT_TIMESTAMP()
-		      ORDER BY PremiumCents ASC`,
+		      ORDER BY PremiumCents ASC
+		      LIMIT 10000`,
 		Params: map[string]interface{}{"requestID": requestID},
 	}
 	iter := r.client.Single().Query(ctx, stmt)
