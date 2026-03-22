@@ -17,12 +17,15 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/rechedev9/riskforge/internal/adapter"
+	spanneradapter "github.com/rechedev9/riskforge/internal/adapter/spanner"
 	"github.com/rechedev9/riskforge/internal/circuitbreaker"
+	"github.com/rechedev9/riskforge/internal/cleanup"
 	"github.com/rechedev9/riskforge/internal/domain"
 	"github.com/rechedev9/riskforge/internal/handler"
 	"github.com/rechedev9/riskforge/internal/metrics"
 	"github.com/rechedev9/riskforge/internal/middleware"
 	"github.com/rechedev9/riskforge/internal/orchestrator"
+	"github.com/rechedev9/riskforge/internal/ports"
 	"github.com/rechedev9/riskforge/internal/ratelimiter"
 )
 
@@ -45,7 +48,46 @@ func Run(ctx context.Context, _ []string, stdout, _ io.Writer) error {
 	promReg := prometheus.NewRegistry()
 	rec := metrics.New(promReg)
 
-	carriers := buildCarriers()
+	// Spanner connection (optional — falls back to mock carriers).
+	var quoteRepo ports.QuoteRepository
+	spannerProject := os.Getenv("SPANNER_PROJECT")
+	spannerInstance := os.Getenv("SPANNER_INSTANCE")
+	spannerDB := os.Getenv("SPANNER_DATABASE")
+
+	var carriers []domain.Carrier
+
+	if spannerProject != "" && spannerInstance != "" && spannerDB != "" {
+		spannerClient, err := spanneradapter.NewClient(ctx, spannerProject, spannerInstance, spannerDB)
+		if err != nil {
+			return fmt.Errorf("spanner connect: %w", err)
+		}
+		defer spannerClient.Close()
+		log.Info("connected to spanner", "project", spannerProject, "instance", spannerInstance, "db", spannerDB)
+
+		// Load carriers from Spanner.
+		carrierRepo := spanneradapter.NewCarrierRepo(spannerClient)
+		dbCarriers, err := carrierRepo.ListActive(ctx)
+		if err != nil {
+			log.Warn("failed to load carriers from spanner, using mock carriers", "err", err)
+			carriers = buildCarriers()
+		} else if len(dbCarriers) == 0 {
+			log.Warn("no carriers in spanner, using mock carriers")
+			carriers = buildCarriers()
+		} else {
+			carriers = dbCarriers
+			log.Info("loaded carriers from spanner", "count", len(carriers))
+		}
+
+		qr := spanneradapter.NewQuoteRepo(spannerClient)
+		quoteRepo = qr
+
+		// Start expired quote cleanup.
+		ticker := cleanup.New(qr, 5*time.Minute, log)
+		go ticker.Start(ctx)
+	} else {
+		log.Info("no spanner config, using mock carriers")
+		carriers = buildCarriers()
+	}
 
 	registry := adapter.NewRegistry()
 	breakers := make(map[string]*circuitbreaker.Breaker)
@@ -53,23 +95,54 @@ func Run(ctx context.Context, _ []string, stdout, _ io.Writer) error {
 	trackers := make(map[string]*orchestrator.EMATracker)
 
 	for _, c := range carriers {
+		// Apply defaults for carriers loaded from Spanner without full config.
+		cfg := c.Config
+		if cfg.FailureThreshold == 0 {
+			cfg.FailureThreshold = 5
+		}
+		if cfg.SuccessThreshold == 0 {
+			cfg.SuccessThreshold = 2
+		}
+		if cfg.OpenTimeout == 0 {
+			cfg.OpenTimeout = 30 * time.Second
+		}
+		if cfg.TimeoutHint == 0 {
+			cfg.TimeoutHint = 200 * time.Millisecond
+		}
+		if cfg.HedgeMultiplier == 0 {
+			cfg.HedgeMultiplier = 1.5
+		}
+		if cfg.EMAWindowSize == 0 {
+			cfg.EMAWindowSize = 19
+		}
+		if cfg.EMAWarmupObservations == 0 {
+			cfg.EMAWarmupObservations = 10
+		}
+		if cfg.RateLimit.TokensPerSecond == 0 {
+			cfg.RateLimit.TokensPerSecond = 100
+		}
+		if cfg.RateLimit.Burst == 0 {
+			cfg.RateLimit.Burst = 10
+		}
+
 		breakers[c.ID] = circuitbreaker.New(c.ID, circuitbreaker.Config{
-			FailureThreshold: c.Config.FailureThreshold,
-			SuccessThreshold: c.Config.SuccessThreshold,
-			OpenTimeout:      c.Config.OpenTimeout,
+			FailureThreshold: cfg.FailureThreshold,
+			SuccessThreshold: cfg.SuccessThreshold,
+			OpenTimeout:      cfg.OpenTimeout,
 		}, rec)
 
-		limiters[c.ID] = ratelimiter.New(c.ID, c.Config.RateLimit, rec)
+		limiters[c.ID] = ratelimiter.New(c.ID, cfg.RateLimit, rec)
 
 		trackers[c.ID] = orchestrator.NewEMATracker(
 			c.ID,
-			c.Config.TimeoutHint,
-			c.Config,
+			cfg.TimeoutHint,
+			cfg,
 			rec,
 		)
 
+		// Mock carriers for all (real HTTP carriers would be wired per-carrier config).
 		mock := adapter.NewMockCarrier(c.ID, adapter.MockConfig{
-			BaseLatency: c.Config.TimeoutHint,
+			BaseLatency: cfg.TimeoutHint,
 			JitterMs:    10,
 			FailureRate: 0.0,
 		}, log)
@@ -86,7 +159,7 @@ func Run(ctx context.Context, _ []string, stdout, _ io.Writer) error {
 		Metrics:  rec,
 		Cfg:      orchestrator.Config{},
 		Log:      log,
-		Repo:     nil,
+		Repo:     quoteRepo,
 	})
 
 	h := handler.New(handler.HandlerConfig{
