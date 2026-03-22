@@ -14,10 +14,11 @@ module "iam" {
 }
 
 module "networking" {
-  source      = "../../modules/networking"
-  project_id  = var.project_id
-  region      = var.region
-  environment = local.environment
+  source                 = "../../modules/networking"
+  project_id             = var.project_id
+  region                 = var.region
+  environment            = local.environment
+  connector_machine_type = "e2-micro"
 }
 
 module "spanner" {
@@ -98,10 +99,13 @@ module "pubsub" {
 }
 
 module "monitoring" {
-  source             = "../../modules/monitoring"
-  project_id         = var.project_id
-  service_name       = module.cloud_run_api.service_name
-  service_url        = module.cloud_run_api.service_url
-  notification_email = var.ops_email
-  enable_alerts      = false
+  source                   = "../../modules/monitoring"
+  project_id               = var.project_id
+  service_name             = module.cloud_run_api.service_name
+  service_url              = module.cloud_run_api.service_url
+  notification_email       = var.ops_email
+  enable_alerts            = false
+  worker_service_name      = module.cloud_run_worker.service_name
+  worker_service_url       = module.cloud_run_worker.service_url
+  pubsub_subscription_name = module.pubsub.dlq_subscription_name
 }
