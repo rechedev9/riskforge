@@ -1,5 +1,7 @@
 package domain
 
+import "encoding/json"
+
 // AppetiteRule represents a carrier's appetite for a specific risk profile.
 // Maps to the Spanner AppetiteRules table.
 type AppetiteRule struct {
@@ -11,7 +13,7 @@ type AppetiteRule struct {
 	MinPremium          float64
 	MaxPremium          float64
 	IsActive            bool
-	EligibilityCriteria map[string]any // parsed from JSON
+	EligibilityCriteria json.RawMessage // raw JSON; decoded by callers as needed
 }
 
 // RiskClassification is the input for appetite matching.
