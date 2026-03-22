@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# Lists docs/ files with their YAML front-matter summaries.
+# Enforces that each .md file has `summary` and `read_when` fields.
+# Usage: docs-list [docs-directory]
+#
+# Drop this script into any project's scripts/ folder.
+# Agents run it first to know which docs to read for the current task.
+
+set -euo pipefail
+
+DOCS_DIR="${1:-docs}"
+
+if [ ! -d "$DOCS_DIR" ]; then
+  printf 'Error: directory "%s" not found\n' "$DOCS_DIR" >&2
+  exit 1
+fi
+
+errors=0
+found=0
+
+printf '# Docs Index (%s)\n\n' "$DOCS_DIR"
+printf '%-40s  %s\n' "FILE" "SUMMARY"
+printf '%-40s  %s\n' "----" "-------"
+
+for file in "$DOCS_DIR"/*.md; do
+  [ -f "$file" ] || continue
+  found=$((found + 1))
+
+  # Extract summary and read_when from YAML front-matter
+  summary=""
+  read_when=""
+  in_frontmatter=false
+  in_read_when=false
+
+  while IFS= read -r line; do
+    if [ "$line" = "---" ]; then
+      if [ "$in_frontmatter" = true ]; then
+        break
+      else
+        in_frontmatter=true
+        continue
+      fi
+    fi
+    if [ "$in_frontmatter" = true ]; then
+      case "$line" in
+        summary:*)
+          summary="${line#summary:}"
+          summary="${summary# }"
+          summary="${summary#\"}"
+          summary="${summary%\"}"
+          summary="${summary#\'}"
+          summary="${summary%\'}"
+          in_read_when=false
+          ;;
+        read_when:*)
+          in_read_when=true
+          ;;
+        "  - "*)
+          if [ "$in_read_when" = true ]; then
+            item="${line#  - }"
+            if [ -n "$read_when" ]; then
+              read_when="$read_when; $item"
+            else
+              read_when="$item"
+            fi
+          fi
+          ;;
+        *)
+          in_read_when=false
+          ;;
+      esac
+    fi
+  done < "$file"
+
+  basename="${file##*/}"
+
+  if [ -z "$summary" ]; then
+    printf '%-40s  %s\n' "$basename" "[MISSING front-matter]"
+    errors=$((errors + 1))
+  else
+    printf '%-40s  %s\n' "$basename" "$summary"
+    if [ -n "$read_when" ]; then
+      printf '%-40s  Read when: %s\n' "" "$read_when"
+    fi
+  fi
+done
+
+printf '\n%d docs found' "$found"
+if [ "$errors" -gt 0 ]; then
+  printf ', %d missing front-matter' "$errors"
+fi
+printf '\n'
+
+exit "$errors"
