@@ -1,0 +1,20 @@
+{
+  "name": "spanner-emulator",
+  "description": "Add docker-compose with Spanner emulator, implement Spanner adapters (QuoteRepository, AppetiteRepository, CarrierRepository), wire into cli.Run with graceful fallback, add seed data for demo",
+  "current_phase": "explore",
+  "phases": {
+    "apply": "pending",
+    "archive": "pending",
+    "clean": "pending",
+    "design": "pending",
+    "explore": "pending",
+    "propose": "pending",
+    "review": "pending",
+    "spec": "pending",
+    "tasks": "pending",
+    "verify": "pending"
+  },
+  "created_at": "2026-03-22T14:41:50.603917644Z",
+  "updated_at": "2026-03-22T14:41:50.603917644Z",
+  "base_ref": "97521d8b0d8ba594a85f84549c472b3dc2a06cfc"
+}
