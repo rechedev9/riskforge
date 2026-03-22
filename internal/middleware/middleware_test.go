@@ -24,7 +24,8 @@ func echoHandler() http.Handler {
 // --- Auth tests ---
 
 func TestRequireAPIKey_ValidToken(t *testing.T) {
-	h := middleware.RequireAPIKey(echoHandler(), []string{"test-key-12345678"}, nil, silentLog)
+	h, stop := middleware.RequireAPIKey(echoHandler(), []string{"test-key-12345678"}, nil, silentLog)
+	defer stop()
 	req := httptest.NewRequest(http.MethodPost, "/quotes", nil)
 	req.Header.Set("Authorization", "Bearer test-key-12345678")
 	rec := httptest.NewRecorder()
@@ -40,7 +41,8 @@ func TestRequireAPIKey_ValidToken(t *testing.T) {
 }
 
 func TestRequireAPIKey_Rejected(t *testing.T) {
-	h := middleware.RequireAPIKey(echoHandler(), []string{"correct-key"}, nil, silentLog)
+	h, stop := middleware.RequireAPIKey(echoHandler(), []string{"correct-key"}, nil, silentLog)
+	defer stop()
 
 	tests := []struct {
 		name   string
@@ -74,7 +76,8 @@ func TestRequireAPIKey_Rejected(t *testing.T) {
 }
 
 func TestRequireAPIKey_SkipPaths(t *testing.T) {
-	h := middleware.RequireAPIKey(echoHandler(), []string{"key1"}, []string{"/healthz", "/metrics"}, silentLog)
+	h, stop := middleware.RequireAPIKey(echoHandler(), []string{"key1"}, []string{"/healthz", "/metrics"}, silentLog)
+	defer stop()
 
 	for _, path := range []string{"/healthz", "/metrics"} {
 		t.Run(path, func(t *testing.T) {
@@ -89,7 +92,8 @@ func TestRequireAPIKey_SkipPaths(t *testing.T) {
 }
 
 func TestRequireAPIKey_ShortKey(t *testing.T) {
-	h := middleware.RequireAPIKey(echoHandler(), []string{"abc"}, nil, silentLog)
+	h, stop := middleware.RequireAPIKey(echoHandler(), []string{"abc"}, nil, silentLog)
+	defer stop()
 	req := httptest.NewRequest(http.MethodPost, "/quotes", nil)
 	req.Header.Set("Authorization", "Bearer abc")
 	rec := httptest.NewRecorder()
@@ -107,7 +111,8 @@ func TestRequireAPIKey_ShortKey(t *testing.T) {
 // --- Auth failure rate-limit tests ---
 
 func TestRequireAPIKey_RateLimitsFailures(t *testing.T) {
-	h := middleware.RequireAPIKey(echoHandler(), []string{"correct-key"}, nil, silentLog)
+	h, stop := middleware.RequireAPIKey(echoHandler(), []string{"correct-key"}, nil, silentLog)
+	defer stop()
 
 	const burst = 10
 	for i := range burst {
@@ -138,7 +143,8 @@ func TestRequireAPIKey_RateLimitsFailures(t *testing.T) {
 }
 
 func TestRequireAPIKey_RateLimitDoesNotAffectValidKeys(t *testing.T) {
-	h := middleware.RequireAPIKey(echoHandler(), []string{"correct-key"}, nil, silentLog)
+	h, stop := middleware.RequireAPIKey(echoHandler(), []string{"correct-key"}, nil, silentLog)
+	defer stop()
 
 	// Exhaust the failure budget from this IP.
 	const burst = 10

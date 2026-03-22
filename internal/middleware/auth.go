@@ -27,9 +27,10 @@ var tooManyRequestsBody = []byte(`{"error":"TOO_MANY_REQUESTS: too many failed a
 // authFailureLimiter tracks per-IP rate limits on authentication failures.
 // Burst of 10 failures allowed; tokens refill at ~1 per 6 seconds.
 type authFailureLimiter struct {
-	ips   sync.Map
-	rate  rate.Limit
-	burst int
+	ips      sync.Map
+	lastSeen sync.Map // IP -> time.Time
+	rate     rate.Limit
+	burst    int
 }
 
 func newAuthFailureLimiter() *authFailureLimiter {
@@ -52,12 +53,38 @@ func (l *authFailureLimiter) recordFailure(ip string) {
 }
 
 func (l *authFailureLimiter) getOrCreate(ip string) *rate.Limiter {
+	l.lastSeen.Store(ip, time.Now())
 	if v, ok := l.ips.Load(ip); ok {
 		return v.(*rate.Limiter)
 	}
 	lim := rate.NewLimiter(l.rate, l.burst)
 	actual, _ := l.ips.LoadOrStore(ip, lim)
 	return actual.(*rate.Limiter)
+}
+
+// startCleanup runs a background goroutine that evicts entries older than ttl
+// every interval. Returns a stop function that must be called on shutdown.
+func (l *authFailureLimiter) startCleanup(interval, ttl time.Duration) func() {
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case now := <-ticker.C:
+				l.lastSeen.Range(func(key, value any) bool {
+					if now.Sub(value.(time.Time)) > ttl {
+						l.ips.Delete(key)
+						l.lastSeen.Delete(key)
+					}
+					return true
+				})
+			}
+		}
+	}()
+	return cancel
 }
 
 // ClientIDFromContext returns the truncated API key identifier stored by
@@ -72,7 +99,7 @@ func ClientIDFromContext(ctx context.Context) string {
 // RequireAPIKey rejects requests that do not carry a valid Bearer token.
 // Keys in skipPaths bypass authentication (e.g. /healthz, /metrics).
 // Each key is identified by its first 8 characters + "..." for logging.
-func RequireAPIKey(next http.Handler, keys []string, skipPaths []string, log *slog.Logger) http.Handler {
+func RequireAPIKey(next http.Handler, keys []string, skipPaths []string, log *slog.Logger) (http.Handler, func()) {
 	// Pre-build parallel slices: keyBytes for comparison, keyIDs for context.
 	keyBytes := make([][]byte, len(keys))
 	keyIDs := make([]string, len(keys))
@@ -91,6 +118,7 @@ func RequireAPIKey(next http.Handler, keys []string, skipPaths []string, log *sl
 	}
 
 	limiter := newAuthFailureLimiter()
+	stopCleanup := limiter.startCleanup(60*time.Second, 5*time.Minute)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if skip[r.URL.Path] {
@@ -145,7 +173,7 @@ func RequireAPIKey(next http.Handler, keys []string, skipPaths []string, log *sl
 
 		ctx := context.WithValue(r.Context(), clientIDKey, keyIDs[matchIdx])
 		next.ServeHTTP(w, r.WithContext(ctx))
-	})
+	}), stopCleanup
 }
 
 func writeUnauthorized(w http.ResponseWriter) {
