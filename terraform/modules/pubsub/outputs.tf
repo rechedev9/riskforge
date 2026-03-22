@@ -12,3 +12,8 @@ output "subscription_id" {
   value       = google_pubsub_subscription.appetite_events_push.id
   description = "Push subscription ID"
 }
+
+output "dlq_subscription_name" {
+  value       = google_pubsub_subscription.appetite_events_dlq_pull.name
+  description = "DLQ pull subscription name for monitoring alert filter"
+}
