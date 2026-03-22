@@ -36,6 +36,7 @@ resource "google_spanner_database" "main" {
         IsActive BOOL NOT NULL DEFAULT (true),
         CreatedAt TIMESTAMP NOT NULL OPTIONS (allow_commit_timestamp = true),
         UpdatedAt TIMESTAMP NOT NULL OPTIONS (allow_commit_timestamp = true),
+        Config JSON,
       ) PRIMARY KEY (CarrierId)
     EOT
     ,
@@ -53,6 +54,24 @@ resource "google_spanner_database" "main" {
         CreatedAt TIMESTAMP NOT NULL OPTIONS (allow_commit_timestamp = true),
       ) PRIMARY KEY (CarrierId, RuleId),
         INTERLEAVE IN PARENT Carriers ON DELETE CASCADE
+    EOT
+    ,
+    <<-EOT
+      CREATE TABLE Quotes (
+        RequestID STRING(256) NOT NULL,
+        CarrierID STRING(36) NOT NULL,
+        PremiumCents INT64 NOT NULL,
+        Currency STRING(3) NOT NULL DEFAULT ('USD'),
+        ExpiresAt TIMESTAMP NOT NULL,
+        IsHedged BOOL NOT NULL DEFAULT (false),
+        LatencyMs INT64 NOT NULL,
+        CarrierRef STRING(256),
+        CreatedAt TIMESTAMP NOT NULL OPTIONS (allow_commit_timestamp = true),
+      ) PRIMARY KEY (RequestID, CarrierID)
+    EOT
+    ,
+    <<-EOT
+      CREATE INDEX QuotesByExpiry ON Quotes (ExpiresAt)
     EOT
     ,
   ]
