@@ -327,11 +327,17 @@ func BenchmarkOrchestrator_GetQuotes_TwoCarriers(b *testing.B) {
 		fix.limiters[c.ID] = ratelimiter.New(c.ID, c.Config.RateLimit, fix.metrics)
 		fix.trackers[c.ID] = orchestrator.NewEMATracker(c.ID, c.Config.TimeoutHint, c.Config, fix.metrics)
 	}
-	orch := orchestrator.New(
-		fix.carriers, fix.registry, fix.breakers, fix.limiters, fix.trackers,
-		fix.metrics, orchestrator.Config{HedgePollInterval: 5 * time.Millisecond}, discardLog,
-		nil, // no repository in benchmarks
-	)
+	orch := orchestrator.New(orchestrator.OrchestratorConfig{
+		Carriers: fix.carriers,
+		Registry: fix.registry,
+		Breakers: fix.breakers,
+		Limiters: fix.limiters,
+		Trackers: fix.trackers,
+		Metrics:  fix.metrics,
+		Cfg:      orchestrator.Config{HedgePollInterval: 5 * time.Millisecond},
+		Log:      discardLog,
+		Repo:     nil, // no repository in benchmarks
+	})
 
 	req := domain.QuoteRequest{
 		RequestID:     "bench-01",

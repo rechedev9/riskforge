@@ -115,11 +115,17 @@ func buildRandomOrch(t *testing.T, rng *rand.Rand, carriers []domain.Carrier, tr
 		trackers[c.ID] = orchestrator.NewEMATracker(c.ID, c.Config.TimeoutHint, c.Config, noop)
 	}
 
-	return orchestrator.New(
-		carriers, registry, breakers, limiters, trackers,
-		noop, orchestrator.Config{HedgePollInterval: 5 * time.Millisecond}, discardLog,
-		nil,
-	)
+	return orchestrator.New(orchestrator.OrchestratorConfig{
+		Carriers: carriers,
+		Registry: registry,
+		Breakers: breakers,
+		Limiters: limiters,
+		Trackers: trackers,
+		Metrics:  noop,
+		Cfg:      orchestrator.Config{HedgePollInterval: 5 * time.Millisecond},
+		Log:      discardLog,
+		Repo:     nil,
+	})
 }
 
 // checkInvariants verifies the core orchestrator contract on a result set.
