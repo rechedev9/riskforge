@@ -1,7 +1,3 @@
-# -----------------------------------------------------------------------------
-# Service Accounts
-# -----------------------------------------------------------------------------
-
 resource "google_service_account" "cloud_run_api" {
   account_id   = "cloud-run-api-${var.environment}"
   display_name = "Cloud Run API (${var.environment})"
@@ -23,80 +19,32 @@ resource "google_service_account" "pubsub_invoker" {
   project      = var.project_id
 }
 
-# -----------------------------------------------------------------------------
-# API SA IAM Bindings (5 roles)
-# -----------------------------------------------------------------------------
-
-resource "google_project_iam_member" "api_spanner" {
-  project = var.project_id
-  role    = "roles/spanner.databaseUser"
-  member  = "serviceAccount:${google_service_account.cloud_run_api.email}"
+locals {
+  # Only project-level roles that cannot be scoped to individual resources.
+  # Resource-scoped IAM (spanner, storage, pubsub, run.invoker) is handled
+  # by each respective module for least-privilege.
+  sa_project_roles = flatten([
+    for sa_key, sa_email in {
+      api    = google_service_account.cloud_run_api.email
+      worker = google_service_account.cloud_run_worker.email
+      } : [
+      for role in [
+        "roles/logging.logWriter",
+        "roles/cloudtrace.agent",
+        "roles/secretmanager.secretAccessor",
+        ] : {
+        key   = "${sa_key}-${replace(role, "roles/", "")}"
+        email = sa_email
+        role  = role
+      }
+    ]
+  ])
 }
 
-resource "google_project_iam_member" "api_secretmanager" {
+resource "google_project_iam_member" "sa_roles" {
+  for_each = { for binding in local.sa_project_roles : binding.key => binding }
+
   project = var.project_id
-  role    = "roles/secretmanager.secretAccessor"
-  member  = "serviceAccount:${google_service_account.cloud_run_api.email}"
-}
-
-resource "google_project_iam_member" "api_storage" {
-  project = var.project_id
-  role    = "roles/storage.objectUser"
-  member  = "serviceAccount:${google_service_account.cloud_run_api.email}"
-}
-
-resource "google_project_iam_member" "api_logging" {
-  project = var.project_id
-  role    = "roles/logging.logWriter"
-  member  = "serviceAccount:${google_service_account.cloud_run_api.email}"
-}
-
-resource "google_project_iam_member" "api_tracing" {
-  project = var.project_id
-  role    = "roles/cloudtrace.agent"
-  member  = "serviceAccount:${google_service_account.cloud_run_api.email}"
-}
-
-# -----------------------------------------------------------------------------
-# Worker SA IAM Bindings (5 roles)
-# -----------------------------------------------------------------------------
-
-resource "google_project_iam_member" "worker_spanner" {
-  project = var.project_id
-  role    = "roles/spanner.databaseUser"
-  member  = "serviceAccount:${google_service_account.cloud_run_worker.email}"
-}
-
-resource "google_project_iam_member" "worker_secretmanager" {
-  project = var.project_id
-  role    = "roles/secretmanager.secretAccessor"
-  member  = "serviceAccount:${google_service_account.cloud_run_worker.email}"
-}
-
-resource "google_project_iam_member" "worker_logging" {
-  project = var.project_id
-  role    = "roles/logging.logWriter"
-  member  = "serviceAccount:${google_service_account.cloud_run_worker.email}"
-}
-
-resource "google_project_iam_member" "worker_tracing" {
-  project = var.project_id
-  role    = "roles/cloudtrace.agent"
-  member  = "serviceAccount:${google_service_account.cloud_run_worker.email}"
-}
-
-resource "google_project_iam_member" "worker_pubsub" {
-  project = var.project_id
-  role    = "roles/pubsub.subscriber"
-  member  = "serviceAccount:${google_service_account.cloud_run_worker.email}"
-}
-
-# -----------------------------------------------------------------------------
-# Invoker SA IAM Binding (1 role)
-# -----------------------------------------------------------------------------
-
-resource "google_project_iam_member" "invoker_run" {
-  project = var.project_id
-  role    = "roles/run.invoker"
-  member  = "serviceAccount:${google_service_account.pubsub_invoker.email}"
+  role    = each.value.role
+  member  = "serviceAccount:${each.value.email}"
 }

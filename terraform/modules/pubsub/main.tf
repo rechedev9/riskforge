@@ -2,6 +2,10 @@ data "google_project" "current" {
   project_id = var.project_id
 }
 
+locals {
+  pubsub_service_agent = "serviceAccount:service-${data.google_project.current.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+}
+
 resource "google_pubsub_topic" "appetite_events" {
   name    = "appetite-events-${var.environment}"
   project = var.project_id
@@ -93,12 +97,12 @@ resource "google_pubsub_subscription_iam_member" "worker_subscriber" {
 resource "google_pubsub_topic_iam_member" "dlq_publisher" {
   topic  = google_pubsub_topic.appetite_events_dlq.name
   role   = "roles/pubsub.publisher"
-  member = "serviceAccount:service-${data.google_project.current.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+  member = local.pubsub_service_agent
 }
 
 # Pub/Sub service agent can subscribe to push subscription (for dead letter forwarding)
 resource "google_pubsub_subscription_iam_member" "dlq_subscriber" {
   subscription = google_pubsub_subscription.appetite_events_push.name
   role         = "roles/pubsub.subscriber"
-  member       = "serviceAccount:service-${data.google_project.current.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+  member       = local.pubsub_service_agent
 }

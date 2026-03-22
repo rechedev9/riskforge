@@ -30,7 +30,7 @@ resource "google_storage_bucket" "documents" {
 }
 
 resource "google_artifact_registry_repository" "docker" {
-  repository_id = "appetite-engine"
+  repository_id = "appetite-engine-${var.environment}"
   format        = "DOCKER"
   location      = var.region
   project       = var.project_id

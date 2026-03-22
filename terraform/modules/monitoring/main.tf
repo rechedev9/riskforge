@@ -1,4 +1,6 @@
 resource "google_monitoring_alert_policy" "latency" {
+  count = var.enable_alerts ? 1 : 0
+
   display_name = "Cloud Run ${var.service_name} - High Latency"
   project      = var.project_id
   combiner     = "OR"
@@ -45,12 +47,14 @@ resource "google_monitoring_alert_policy" "latency" {
 }
 
 resource "google_monitoring_alert_policy" "error_rate" {
+  count = var.enable_alerts ? 1 : 0
+
   display_name = "Cloud Run ${var.service_name} - High Error Rate"
   project      = var.project_id
   combiner     = "OR"
 
   conditions {
-    display_name = "5xx error rate > 1%"
+    display_name = "5xx error count > 5 per minute"
 
     condition_threshold {
       filter = <<-EOT
@@ -61,7 +65,7 @@ resource "google_monitoring_alert_policy" "error_rate" {
       EOT
 
       comparison      = "COMPARISON_GT"
-      threshold_value = 0.01
+      threshold_value = 5
       duration        = "300s"
 
       aggregations {
@@ -81,7 +85,7 @@ resource "google_monitoring_alert_policy" "error_rate" {
   ]
 
   documentation {
-    content   = "Error rate for Cloud Run service `$${resource.labels.service_name}` exceeded 1%. Check Cloud Run logs for details."
+    content   = "Error rate for Cloud Run service `$${resource.labels.service_name}` exceeded threshold. Check Cloud Run logs for details."
     mime_type = "text/markdown"
   }
 
@@ -92,6 +96,8 @@ resource "google_monitoring_alert_policy" "error_rate" {
 }
 
 resource "google_monitoring_alert_policy" "cpu_utilization" {
+  count = var.enable_alerts ? 1 : 0
+
   display_name = "Cloud Run ${var.service_name} - CPU Utilization > 80%"
   project      = var.project_id
   combiner     = "OR"
@@ -138,6 +144,8 @@ resource "google_monitoring_alert_policy" "cpu_utilization" {
 }
 
 resource "google_monitoring_uptime_check_config" "api_health" {
+  count = var.enable_alerts ? 1 : 0
+
   display_name = "${var.service_name} Health Check"
   project      = var.project_id
   timeout      = "10s"

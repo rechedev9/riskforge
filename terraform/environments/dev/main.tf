@@ -1,3 +1,7 @@
+locals {
+  environment = "dev"
+}
+
 provider "google" {
   project = var.project_id
   region  = var.region
@@ -6,21 +10,21 @@ provider "google" {
 module "iam" {
   source      = "../../modules/iam"
   project_id  = var.project_id
-  environment = "dev"
+  environment = local.environment
 }
 
 module "networking" {
   source      = "../../modules/networking"
   project_id  = var.project_id
   region      = var.region
-  environment = "dev"
+  environment = local.environment
 }
 
 module "spanner" {
   source                   = "../../modules/spanner"
   project_id               = var.project_id
   region                   = var.region
-  environment              = "dev"
+  environment              = local.environment
   spanner_processing_units = 100
   deletion_protection      = false
   sa_emails                = [module.iam.api_sa_email, module.iam.worker_sa_email]
@@ -30,14 +34,14 @@ module "storage" {
   source          = "../../modules/storage"
   project_id      = var.project_id
   region          = var.region
-  environment     = "dev"
+  environment     = local.environment
   api_sa_email    = module.iam.api_sa_email
   worker_sa_email = module.iam.worker_sa_email
 }
 
 module "cloud_run_api" {
   source                = "../../modules/cloud-run"
-  service_name          = "appetite-engine-api-dev"
+  service_name          = "appetite-engine-api-${local.environment}"
   project_id            = var.project_id
   region                = var.region
   image                 = "${module.storage.registry_url}/api:${var.image_tag}"
@@ -54,14 +58,14 @@ module "cloud_run_api" {
     SPANNER_DATABASE = module.spanner.database_name
     PUBSUB_TOPIC     = module.pubsub.topic_name
     GCP_PROJECT      = var.project_id
-    ENVIRONMENT      = "dev"
+    ENVIRONMENT      = local.environment
   }
-  labels = { environment = "dev", service = "api" }
+  labels = { environment = local.environment, service = "api" }
 }
 
 module "cloud_run_worker" {
   source                = "../../modules/cloud-run"
-  service_name          = "appetite-engine-worker-dev"
+  service_name          = "appetite-engine-worker-${local.environment}"
   project_id            = var.project_id
   region                = var.region
   image                 = "${module.storage.registry_url}/worker:${var.image_tag}"
@@ -78,15 +82,15 @@ module "cloud_run_worker" {
     SPANNER_INSTANCE = module.spanner.instance_name
     SPANNER_DATABASE = module.spanner.database_name
     GCP_PROJECT      = var.project_id
-    ENVIRONMENT      = "dev"
+    ENVIRONMENT      = local.environment
   }
-  labels = { environment = "dev", service = "worker" }
+  labels = { environment = local.environment, service = "worker" }
 }
 
 module "pubsub" {
   source           = "../../modules/pubsub"
   project_id       = var.project_id
-  environment      = "dev"
+  environment      = local.environment
   push_endpoint    = module.cloud_run_worker.service_url
   invoker_sa_email = module.iam.pubsub_invoker_sa_email
   worker_sa_email  = module.iam.worker_sa_email
@@ -99,4 +103,5 @@ module "monitoring" {
   service_name       = module.cloud_run_api.service_name
   service_url        = module.cloud_run_api.service_url
   notification_email = var.ops_email
+  enable_alerts      = false
 }

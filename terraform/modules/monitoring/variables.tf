@@ -17,3 +17,9 @@ variable "notification_email" {
   type        = string
   description = "Email address for alert notifications"
 }
+
+variable "enable_alerts" {
+  type        = bool
+  default     = true
+  description = "Enable alert policies and uptime checks (disable for dev to reduce noise)"
+}

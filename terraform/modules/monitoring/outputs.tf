@@ -4,10 +4,6 @@ output "notification_channel_id" {
 }
 
 output "alert_policy_ids" {
-  value = [
-    google_monitoring_alert_policy.latency.id,
-    google_monitoring_alert_policy.error_rate.id,
-    google_monitoring_alert_policy.cpu_utilization.id,
-  ]
+  value       = var.enable_alerts ? [for p in [google_monitoring_alert_policy.latency[0], google_monitoring_alert_policy.error_rate[0], google_monitoring_alert_policy.cpu_utilization[0]] : p.id] : []
   description = "Alert policy IDs"
 }
