@@ -1,0 +1,1044 @@
+
+--- SKILL ---
+
+---
+name: sdd-design
+description: >
+  Create technical design document capturing HOW the change is implemented. Architecture decisions, data flow, interfaces.
+  Trigger: When user runs /sdd-continue after proposal is approved, or after sdd-propose completes.
+license: MIT
+metadata:
+  version: "1.0"
+---
+
+# SDD Design
+
+You are executing the **design** phase inline. While the proposal captures WHAT and WHY, and specs capture the requirements, the design captures HOW the change will be implemented at the architecture and code-structure level. Your design must follow existing project patterns and conventions.
+
+## Activation
+
+User runs `/sdd-continue` or `/sdd-design` after the proposal is approved. Reads `openspec/changes/{changeName}/proposal.md`, existing spec files if present, and `exploration.md` if available.
+
+## Execution Steps
+
+### Step 1: Load Project Context
+
+1. Read `openspec/config.yaml` for:
+   - Technology stack (runtime, frameworks, ORM, database)
+   - Architecture pattern (monorepo, workspaces)
+   - Coding conventions (type strictness, error handling, file organization)
+   - Design phase required sections (`phases.design.required_sections`)
+2. Read `CLAUDE.md` for any additional rules not captured in config.
+3. **Load framework skills.** Based on the tech stack identified in config.yaml, read the relevant skill file(s) from `~/.claude/skills/frameworks/` before designing components or interfaces for that domain. For example: React → `react-19/SKILL.md`, Next.js → `nextjs-15/SKILL.md`, Tailwind → `tailwind-4/SKILL.md`, Zod → `zod-4/SKILL.md`. If a skill file does not exist, proceed without it. This step is required so that interface definitions and data flow diagrams follow idiomatic patterns for the project's actual framework versions.
+4. Note all constraints from `CLAUDE.md` that affect design decisions (type strictness, error handling patterns, file organization limits, etc.).
+
+### Step 2: Read Proposal and Optional Specs
+
+1. Read `proposal.md` at the provided path.
+2. Extract:
+   - Approach and key decisions
+   - Affected areas with file paths
+   - Dependencies (internal and external)
+   - Success criteria
+3. If `spec_paths` are provided, read spec files to align design with requirements:
+   - Map each requirement to a design component
+   - Ensure every MUST requirement has a clear implementation path
+4. If `exploration_path` is provided, read for additional codebase context.
+
+### Step 3: Analyze Existing Codebase Patterns
+
+This is a critical step. The design MUST follow existing patterns. Read source code to understand:
+
+1. **Project structure**: How are files organized? What naming conventions are used?
+   - Use Glob to map the directory tree
+   - Identify patterns: feature-based, layer-based, domain-driven
+2. **Type patterns**: How are types/interfaces defined and shared?
+   - Search for type definition files and shared type locations
+   - Note generic patterns used (Result types, Option types, error enums, etc.)
+3. **Error handling patterns**: How are errors created and propagated?
+   - Find the project's error handling pattern and how it is used
+   - Identify error type conventions (custom error types, error enums, etc.)
+   - Note error boundary patterns if applicable (UI frameworks, middleware, etc.)
+4. **API patterns**: How are endpoints defined?
+   - Read existing route/controller files
+   - Note middleware usage, validation patterns, response shapes
+5. **Database patterns**: How are queries structured?
+   - Read existing repository/service files
+   - Note ORM usage, transaction patterns, migration conventions
+6. **Testing patterns**: How are tests structured?
+   - Read existing test files
+   - Note test grouping patterns, assertion styles, and test runner conventions
+
+### Step 4: Make Architecture Decisions
+
+For each significant design choice, evaluate alternatives:
+
+| Decision Criteria    | What to Evaluate                              |
+|----------------------|-----------------------------------------------|
+| Consistency          | Does this match existing project patterns?    |
+| Type safety          | Can this be fully typed without escape hatches?|
+| Testability          | Can each component be tested in isolation?    |
+| Simplicity           | Is this the simplest solution that works?     |
+| Performance          | Are there known performance implications?     |
+| Maintainability      | Will future developers understand this?       |
+
+Every decision must have at least 2 alternatives with rationale for the chosen option. If existing project code already establishes a pattern, "consistency with existing code" is a valid (and strong) rationale.
+
+### Step 5: Design Data Flow
+
+Create clear data flow descriptions showing how data moves through the system for each key operation:
+
+```
+User Action
+  -> Frontend Component (file path)
+    -> API Call (endpoint, method, payload type)
+      -> Backend Handler (file path)
+        -> Validation (schema, types)
+          -> Business Logic (service file path)
+            -> Database Query (repository file path)
+              -> Response (type, shape)
+            <- Error Path (error type per project conventions)
+          <- Validation Error (shape)
+        <- HTTP Response (status, body type)
+      <- Frontend State Update (store/hook file path)
+    <- UI Update (component re-render)
+```
+
+Use ASCII diagrams for complex flows. Keep it readable without specialized tooling.
+
+### Step 6: Define Interfaces and Contracts
+
+Write type/interface definitions in the project's language. Use the actual syntax that will compile/type-check — not pseudocode. Follow the project's error handling pattern (per CLAUDE.md) for fallible operations.
+
+For API endpoints, define request/response contracts:
+
+```
+POST /api/{resource}
+  Request Body: Create{Thing}Input
+  Response 201: { data: {Thing} }
+  Response 400: { error: { code: string, message: string } }
+  Response 401: { error: { code: 'UNAUTHORIZED' } }
+```
+
+For database schemas, define the migration:
+
+```sql
+-- Migration: add_{table_name}
+CREATE TABLE {table_name} (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  ...
+);
+```
+
+### Step 7: Plan Testing Strategy
+
+Map each requirement (from specs if available, or from proposal success criteria) to a testing approach:
+
+| What to Test                  | Type        | Approach                          | File Path                    |
+|-------------------------------|-------------|-----------------------------------|------------------------------|
+| {Feature} input validation    | Unit        | Test each validation rule         | {path per project convention} |
+| {Feature} business logic      | Unit        | Test success/error paths          | {path per project convention} |
+| {Feature} API endpoint        | Integration | Test HTTP request/response cycle  | {path per project convention} |
+| {Feature} error handling      | Unit        | Test all error variants           | {path per project convention} |
+| {Feature} database operations | Integration | Test with real DB (test container) | {path per project convention} |
+
+For each test, note:
+- What dependencies need to be mocked vs. real
+- What fixtures/factories are needed
+- Whether it maps to a specific spec scenario (reference REQ-ID)
+
+### Step 8: Write design.md
+
+Create `openspec/changes/{change_name}/design.md`:
+
+```markdown
+# Technical Design: {Change Name (title case)}
+
+**Change**: {change_name}
+**Date**: {ISO 8601 timestamp}
+**Status**: draft
+**Depends On**: proposal.md
+
+---
+
+## Technical Approach
+
+{2-3 paragraphs describing the overall technical strategy. How does this fit into the existing architecture? What patterns does it follow? What is the high-level implementation path?}
+
+## Architecture Decisions
+
+| # | Decision                | Choice              | Alternatives Considered      | Rationale                              |
+|---|-------------------------|---------------------|------------------------------|----------------------------------------|
+| 1 | {Decision point}        | {Chosen approach}   | {Alt 1}, {Alt 2}             | {Why chosen over alternatives}         |
+| 2 | {Decision point}        | {Chosen approach}   | {Alt 1}, {Alt 2}             | {Why chosen over alternatives}         |
+| 3 | {Decision point}        | {Chosen approach}   | {Alt 1}, {Alt 2}             | {Why chosen over alternatives}         |
+
+## Data Flow
+
+### {Operation 1 Name}
+
+{ASCII diagram or step-by-step description showing data flow}
+
+### {Operation 2 Name}
+
+{ASCII diagram or step-by-step description showing data flow}
+
+## File Changes
+
+| # | File Path (absolute)           | Action  | Description                               |
+|---|--------------------------------|---------|-------------------------------------------|
+| 1 | {/abs/path/to/file.ts}        | create  | {What this new file contains}             |
+| 2 | {/abs/path/to/existing.ts}    | modify  | {What changes and why}                    |
+| 3 | {/abs/path/to/deprecated.ts}  | delete  | {Why this file is being removed}          |
+
+**Summary**: {N} files created, {N} files modified, {N} files deleted
+
+## Interfaces and Contracts
+
+### Types
+
+{TypeScript type definitions for new interfaces}
+
+### API Contracts
+
+{Request/response contracts for new or modified endpoints}
+
+### Database Schema
+
+{Migration SQL or ORM schema definitions, if applicable}
+
+## Testing Strategy
+
+| # | What to Test                  | Type         | File Path                          | Maps to Requirement |
+|---|-------------------------------|--------------|------------------------------------|---------------------|
+| 1 | {Test subject}                | unit         | {/abs/path/to/test file}       | REQ-{DOMAIN}-{NNN} |
+| 2 | {Test subject}                | unit         | {/abs/path/to/test file}       | REQ-{DOMAIN}-{NNN} |
+| 3 | {Test subject}                | integration  | {/abs/path/to/test file}       | REQ-{DOMAIN}-{NNN} |
+
+### Test Dependencies
+
+- **Mocks needed**: {list of dependencies to mock}
+- **Fixtures needed**: {list of test data factories}
+- **Infrastructure**: {test database, test containers, etc.}
+
+## Migration and Rollout
+
+{How to deploy this change safely. If no deployment changes needed, state "No migration or rollout steps required."}
+
+### Migration Steps
+
+1. {Step 1 - e.g., "Run database migration"}
+2. {Step 2 - e.g., "Deploy backend with feature flag disabled"}
+3. {Step 3 - e.g., "Enable feature flag for beta users"}
+
+### Rollback Steps
+
+{Reference the proposal's rollback plan and add technical details}
+
+## Open Questions
+
+{Any technical questions that arose during design. These should be resolved before implementation.}
+
+- {Question 1}
+- {Question 2}
+
+---
+
+**Next Step**: After both design and specs are complete, run `sdd-tasks` to create the implementation checklist.
+```
+
+### Step 9: Validate Design Completeness
+
+Before returning, validate:
+
+1. **Every file from the proposal's affected areas** appears in the File Changes table.
+2. **Every success criterion** has a corresponding testing strategy entry.
+3. **Architecture decisions** each have at least 2 alternatives.
+4. **Interfaces use project conventions** (per CLAUDE.md type safety and error handling rules).
+5. **File paths are absolute** throughout the document.
+6. **New files follow project naming conventions** (kebab-case, colocated tests, etc.).
+7. **The design does not exceed project file length limits** (plan to split large files).
+
+### Step 10: Present Summary
+
+Present a markdown summary to the user, then STOP. Do not proceed automatically.
+
+**On success, output:**
+
+```markdown
+## SDD Design: {change_name}
+
+**Decisions**: {N}  |  **File changes**: {create}✚ {modify}✎ {delete}✗  |  **Interfaces**: {N}
+
+### Design Written
+`openspec/changes/{change_name}/design.md`
+
+### File Changes Planned
+| Action | Count |
+|--------|-------|
+| Create | {N} |
+| Modify | {N} |
+| Delete | {N} |
+
+### Interfaces Defined
+{List interface names — 1 per line}
+
+### Testing Strategy
+- **Test cases planned**: {N}
+- **Has database migration**: {yes | no}
+
+{If open questions: ### Open Questions ({N})\n{questions — must be resolved before implementation}\n}
+{If warnings: ### ⚠ Warnings\n- {warning}\n}
+
+**Next step**: Review `openspec/changes/{change_name}/design.md`. When both design and spec are complete, run `/sdd-tasks` to generate the implementation checklist.
+```
+
+## Rules and Constraints
+
+1. **Design MUST follow existing project patterns.** Read code first, then design. Never introduce patterns that conflict with the codebase.
+2. **Include actual type/interface definitions** in the project's language, not pseudo-code. They must compile/type-check.
+3. **Architecture decisions MUST have at least 2 alternatives** with rationale. Single-option "decisions" are not decisions.
+4. **File Changes MUST list EVERY file** that will be created, modified, or deleted. No surprises during implementation.
+5. **Testing strategy MUST cover each requirement** from specs (if available) or each success criterion from proposal.
+6. **Design can run in PARALLEL with sdd-spec.** Both depend only on the proposal.
+7. **Follow the project's error handling pattern** (per CLAUDE.md). Define error variants explicitly.
+8. **All file paths must be absolute.** Never use relative paths.
+9. **Never modify source code.** Design artifacts go in `openspec/changes/{change_name}/`.
+10. **Respect file organization rules.** If the project limits files to 600 lines, plan to split accordingly.
+11. **Interface definitions must be strict.** Use the project's immutability patterns, explicit return types, and no type-system escape hatches (per CLAUDE.md).
+12. **Data flow diagrams must be ASCII-based.** Do not reference external diagramming tools. The design must be readable in any text editor.
+13. **Load framework skills before designing.** Read `~/.claude/skills/frameworks/{framework}/SKILL.md` for every active framework in the project before defining interfaces, data flow, or architecture decisions for that domain. Designing without the framework skill risks specifying deprecated APIs or non-idiomatic patterns that sdd-apply will then implement incorrectly.
+
+## Error Handling
+
+- If `openspec/config.yaml` does not exist: return `status: error` recommending `sdd-init`.
+- If `proposal.md` does not exist: return `status: error` with message.
+- If existing codebase patterns are inconsistent: note in warnings and follow the most common pattern.
+- If the design reveals the proposal scope is insufficient: note in `open_questions` and warn.
+- All errors include the phase name (`design`) and a human-readable message.
+
+## PARCER Contract
+
+```yaml
+phase: design
+preconditions:
+  - proposal.md exists and was approved
+postconditions:
+  - design.md written with all required sections
+  - ≥1 interface definition with typed fields
+```
+
+
+--- CHANGE ---
+
+Name: integration-e2e-testing
+Description: Add integration and E2E tests: full HTTP stack tests (server startup → POST /quotes → response), Spanner adapter repository tests, domain model unit tests, and CLI/startup lifecycle tests. Fill the gaps identified in current test coverage.
+
+--- PROJECT ---
+
+Project: ProyectoAgentero
+Language: go
+Build Tool: go
+Manifests: go.mod
+
+--- PIPELINE CONTEXT ---
+
+Change: integration-e2e-testing — Add integration and E2E tests: full HTTP stack tests (server startup → POST /quotes → response), Spanner adapter repository tests, domain model unit tests, and CLI/startup lifecycle tests. Fill the gaps identified in current test coverage.
+Stack: go (go)
+Exploration: The riskforge codebase has thorough unit coverage for individual components but has no integration or E2E tests that exercise the full assembled stack. **Existing test inventory (17 test files across 9 packages):**
+Proposal: **Date**: 2026-03-22; **Status**: Draft
+
+--- PROPOSAL ---
+
+# Proposal: integration-e2e-testing
+
+**Date**: 2026-03-22
+**Status**: Draft
+
+## Intent
+
+Add integration and E2E tests to close three hard gaps in riskforge test coverage: the full assembled middleware chain (currently exercised only via adversarial/antirez tests that skip `SecurityHeaders` and `LimitConcurrency` assertions), the Spanner adapter repositories (zero test files), and the `cli.Run` startup lifecycle (zero test file). The work follows a hybrid strategy — in-process HTTP stack tests run in every `go test ./...` invocation; Spanner adapter tests are guarded by `//go:build integration` and run only when the emulator is available.
+
+## Scope
+
+### In Scope
+
+- New `internal/integration/` package: full HTTP middleware chain tests using `httptest.NewServer` with real `net.Listener`, mock carriers, no Spanner
+- New `internal/adapter/spanner/quote_repo_test.go` (`//go:build integration`): `Save`, `FindByRequestID` (cache hit/miss), `DeleteExpired`
+- New `internal/adapter/spanner/carrier_repo_test.go` (`//go:build integration`): `ListActive` including `NullJSON` config decoding and positional column ordering
+- New `internal/adapter/spanner/appetite_repo_test.go` (`//go:build integration`): `FindMatchingRules` (state+LOB required; classCode+premium optional), `ListAll`
+- New `internal/adapter/spanner/testutil_test.go` (`//go:build integration`): shared emulator client helper
+- New `internal/cli/run_test.go`: startup lifecycle — `API_KEYS` missing returns error immediately; clean shutdown via context cancellation; poll `/healthz` for readiness
+- `.github/workflows/go.yml` — second CI job (`integration-tests`) that starts the Spanner emulator via `docker-compose` and runs `go test -tags integration -race -count=1 ./internal/adapter/spanner/...`
+- `Makefile` — new `test-integration` target
+
+### Out of Scope
+
+- `internal/domain/` unit tests (pure value types and sentinel errors; deferred — low marginal value)
+- Real GCP Spanner tests (emulator only)
+- HTTP carrier tests against live external endpoints
+- Coverage threshold enforcement (deferred to a separate change)
+- Emulator version pinning in `docker-compose.yml` (deferred — low urgency)
+- Refactoring `cli.Run` to accept a config struct (not required; `t.Setenv` is sufficient)
+- Duplicating antirez adversarial patterns in new integration tests
+
+## Approach
+
+Option C (hybrid) from the exploration: in-process HTTP stack tests cover the gap in assembled middleware chain verification without any CI infrastructure cost; emulator-gated Spanner tests cover the SQL/column-ordering/NullJSON gaps that cannot be verified with fakes; `cli.Run` lifecycle tests use `t.Setenv` and context cancellation to avoid signal machinery.
+
+**Rationale for not modifying `cli.Run`:** The current signature `Run(ctx context.Context, _ []string, stdout, _ io.Writer) error` is directly testable. `t.Setenv("API_KEYS", "...")` sets env vars for the duration of the test and restores them on cleanup. No refactoring is required.
+
+**Rationale for a separate `internal/integration/` package rather than `internal/cli/integration_test.go`:** `cli` imports every adapter including `spanneradapter`. An `_test` package under `cli` would transitively pull Spanner into every test binary even when Spanner is not under test. A standalone `internal/integration/` package has no import of `cli` and imports only `handler`, `middleware`, `orchestrator`, `adapter`, `metrics`, and `testutil` — no Spanner dependency.
+
+**Delineation from antirez tests:** `internal/antirez/antirez_test.go` uses `httptest.NewServer` with `RequireAPIKey` and `mux` but focuses on adversarial boundary attacks (malformed JSON, concurrency storms, corpus-driven fuzzing). The new `internal/integration/` tests focus on correctness of the assembled stack for the happy path and specific middleware behaviors (`SecurityHeaders` values, `LimitConcurrency` 503, unauthenticated 401, `/healthz` bypass). There is no behavioral overlap — antirez tests should not be modified.
+
+### New Files
+
+| File path | Purpose | Build tag |
+|---|---|---|
+| `internal/integration/http_stack_test.go` | Full middleware chain E2E tests using `httptest.NewServer`; mock carriers; no Spanner | (none — runs in standard `go test ./...`) |
+| `internal/adapter/spanner/quote_repo_test.go` | `QuoteRepo.Save`, `FindByRequestID` (hit/miss/expiry), `DeleteExpired` against emulator | `//go:build integration` |
+| `internal/adapter/spanner/carrier_repo_test.go` | `CarrierRepo.ListActive`, JSON config round-trip, inactive row filtering | `//go:build integration` |
+| `internal/adapter/spanner/appetite_repo_test.go` | `AppetiteRepo.FindMatchingRules` (required-only, classCode, premium range, no match), `ListAll` | `//go:build integration` |
+| `internal/adapter/spanner/testutil_test.go` | `newEmulatorClient(t)` helper — reads env vars, calls `spanneradapter.NewClient`, calls `t.Cleanup(client.Close)` | `//go:build integration` |
+| `internal/cli/run_test.go` | `TestRun_MissingAPIKeys`, `TestRun_CleanShutdown` — uses `t.Setenv`, `context.WithCancel`, polls `/healthz` | (none) |
+
+### Modified Files
+
+| File path | Change description |
+|---|---|
+| `.github/workflows/go.yml` | Add `integration-tests` job: `docker-compose up -d spanner-emulator spanner-init`, wait-for-ready step, `go test -tags integration -race -count=1 ./internal/adapter/spanner/...` |
+| `Makefile` | Add `test-integration` target: `docker compose up -d && go test -tags integration -race -count=1 ./internal/adapter/spanner/...` |
+
+## Test Strategy
+
+### `internal/integration/http_stack_test.go`
+
+Wires the full production middleware chain identically to `cli.Run` (lines 178–184):
+
+```
+AuditLog → SecurityHeaders → RequireAPIKey → LimitConcurrency → mux → Handler → Orchestrator
+```
+
+Uses `httptest.NewServer` (real `net.Listener`) with mock carriers (alpha, beta, gamma identical to `buildCarriers()` defaults). Each test calls `t.Cleanup(srv.Close)` and `t.Cleanup(stopAuth)`.
+
+Tests:
+
+- `TestHTTPStack_PostQuotes_HappyPath` — authenticated POST `/quotes` with valid body; asserts 200, non-empty `quotes` array, `Content-Type: application/json`
+- `TestHTTPStack_PostQuotes_Unauthorized` — missing `Authorization` header; asserts 401
+- `TestHTTPStack_PostQuotes_WrongKey` — `Authorization: Bearer wrong`; asserts 401
+- `TestHTTPStack_SecurityHeaders` — authenticated request; asserts `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` present in response
+- `TestHTTPStack_ConcurrencyLimit` — fill semaphore with N goroutines, then one extra; asserts 503 on the overflow request
+- `TestHTTPStack_HealthzBypassesAuth` — unauthenticated GET `/healthz`; asserts 200
+- `TestHTTPStack_ReadyzBypassesAuth` — unauthenticated GET `/readyz`; asserts 200
+- `TestHTTPStack_MetricsBypassesAuth` — unauthenticated GET `/metrics`; asserts 200
+
+### `internal/adapter/spanner/testutil_test.go`
+
+```go
+//go:build integration
+
+func newEmulatorClient(t *testing.T) *spanner.Client {
+    t.Helper()
+    host := os.Getenv("SPANNER_EMULATOR_HOST")
+    if host == "" {
+        t.Skip("SPANNER_EMULATOR_HOST not set — skipping integration test")
+    }
+    client, err := NewClient(context.Background(),
+        envOrDefault("SPANNER_PROJECT", "riskforge-dev"),
+        envOrDefault("SPANNER_INSTANCE", "test-instance"),
+        envOrDefault("SPANNER_DATABASE", "test-db"),
+    )
+    require.NoError(t, err)
+    t.Cleanup(client.Close)
+    return client
+}
+```
+
+The `t.Skip` guard means the integration tests degrade gracefully if the emulator is absent (e.g., a developer running `go test -tags integration ./...` locally without Docker).
+
+### `internal/adapter/spanner/quote_repo_test.go`
+
+Tests use `newEmulatorClient(t)`, then `NewQuoteRepo(client)`. Each test inserts then reads via the repo; no raw Spanner mutations bypass the repo interface.
+
+- `TestQuoteRepo_Save_FindByRequestID` — save two results for the same `requestID`; call `FindByRequestID`; assert `found == true`, len == 2, `PremiumCents` match, results ordered ascending
+- `TestQuoteRepo_FindByRequestID_Miss` — call `FindByRequestID` for an unknown ID; assert `found == false`, `results == nil`
+- `TestQuoteRepo_FindByRequestID_IgnoresExpired` — save one result with `ExpiresAt` in the past (using a direct Spanner mutation to bypass the repo's `CommitTimestamp` constraint); call `FindByRequestID`; assert `found == false`
+- `TestQuoteRepo_DeleteExpired` — save one expired row via direct mutation; call `DeleteExpired`; assert returned count >= 1; call `FindByRequestID`; assert miss
+
+### `internal/adapter/spanner/carrier_repo_test.go`
+
+Tests insert rows directly via Spanner mutations, then read via `NewCarrierRepo(client).ListActive(ctx)`.
+
+- `TestCarrierRepo_ListActive_ReturnsActive` — insert two active rows and one inactive row; assert `ListActive` returns exactly two carriers
+- `TestCarrierRepo_ListActive_DecodesConfig` — insert one active row with a JSON `Config` containing `TimeoutHint`, `FailureThreshold`, `RateLimit`; assert decoded `domain.CarrierConfig` fields match input (verifies `json.Marshal` → `NullJSON` → `json.Unmarshal` round-trip and positional column ordering: `CarrierId, Name, Code, Config`)
+- `TestCarrierRepo_ListActive_NullConfig` — insert one active row with `Config = NULL`; assert `ListActive` returns the carrier with a zero-value `domain.CarrierConfig`
+
+### `internal/adapter/spanner/appetite_repo_test.go`
+
+Tests insert rows directly, then read via `NewAppetiteRepo(client).FindMatchingRules(ctx, risk)`.
+
+- `TestAppetiteRepo_FindMatchingRules_RequiredOnly` — insert two rules: one matching `state="CA"`, `lob="auto"` and one for `state="NY"`; call with `{State: "CA", LineOfBusiness: "auto"}`; assert one result
+- `TestAppetiteRepo_FindMatchingRules_WithClassCode` — insert rule with `ClassCode = "auto-commercial"` and one with `ClassCode = NULL`; call with classCode set; assert both returned (NULL acts as wildcard per the `ClassCode IS NULL OR ClassCode = @classCode` SQL)
+- `TestAppetiteRepo_FindMatchingRules_PremiumRange` — insert rule with `MinPremium = 1000`, `MaxPremium = 5000`; call with `EstimatedPremium = 3000`; assert match; call with `EstimatedPremium = 6000`; assert no match
+- `TestAppetiteRepo_FindMatchingRules_NoMatch` — call with state/lob with no seeded data; assert empty slice, nil error
+- `TestAppetiteRepo_ListAll` — insert three rules across different states; call `ListAll`; assert all three returned
+
+### `internal/cli/run_test.go`
+
+No build tag — runs in standard `go test ./...`. Does not require Spanner (Spanner env vars absent → `cli.Run` falls back to mock carriers).
+
+- `TestRun_MissingAPIKeys` — `t.Setenv("API_KEYS", "")`, call `cli.Run(ctx, nil, io.Discard, io.Discard)`; assert returned error wraps the string `"API_KEYS environment variable required"`; assert returns immediately (no blocking)
+- `TestRun_CleanShutdown` — `t.Setenv("API_KEYS", "test-key-abc")`, `t.Setenv("PORT", freePort())`; call `cli.Run` in a goroutine; poll `GET http://127.0.0.1:{port}/healthz` until 200 or 2 s timeout; cancel context; assert goroutine returns nil within 5 s
+
+`freePort()` is a helper that opens and immediately closes a `net.Listen("tcp", ":0")` to obtain an ephemeral port, avoiding port collisions between parallel tests.
+
+### CI integration job
+
+```yaml
+integration-tests:
+  name: Integration Tests (Spanner Emulator)
+  runs-on: ubuntu-latest
+  steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-go@v5
+      with:
+        go-version: "1.25"
+    - name: Start Spanner emulator
+      run: docker compose up -d spanner-emulator spanner-init
+    - name: Wait for emulator ready
+      run: |
+        for i in $(seq 1 30); do
+          curl -sf http://localhost:9020/v1/projects/riskforge-dev/instances && break
+          sleep 2
+        done
+    - name: Run integration tests
+      env:
+        SPANNER_EMULATOR_HOST: localhost:9010
+        SPANNER_PROJECT: riskforge-dev
+        SPANNER_INSTANCE: test-instance
+        SPANNER_DATABASE: test-db
+      run: go test -tags integration -race -count=1 -v ./internal/adapter/spanner/...
+```
+
+The integration job is independent of `build-and-test` — a Spanner emulator failure does not block the fast-path job.
+
+## Risks
+
+| Risk | Mitigation |
+|---|---|
+| Spanner emulator absent in developer's local env | `newEmulatorClient(t)` calls `t.Skip` when `SPANNER_EMULATOR_HOST` is unset; integration tests degrade silently rather than fail |
+| `TestRun_CleanShutdown` flakiness from port collision | Use `net.Listen(":0")` to obtain an OS-assigned ephemeral port; pass it to `Run` via `t.Setenv("PORT", ...)` |
+| `TestRun_CleanShutdown` blocked by `signal.NotifyContext` inside `cli.Run` | `cli.Run` wraps the passed-in `ctx` with `signal.NotifyContext` at line 45; cancelling the parent context propagates correctly — `<-ctx.Done()` fires at line 203 regardless of the signal wrapper |
+| Column order regression in `CarrierRepo.ListActive` | `TestCarrierRepo_ListActive_DecodesConfig` verifies the full `row.Columns(&id, &name, &code, &configJSON)` scan against a known insertion; a reorder in the SQL breaks this test deterministically |
+| `antirez` test overlap causing confusion | New integration tests are in a separate package (`internal/integration`) with a distinct focus (correctness + middleware headers); antirez focus remains adversarial/chaos; no shared helpers are introduced between the two |
+
+## Rollback Plan
+
+All new test files are additive — they introduce no changes to production code. Rollback is:
+
+1. Delete `internal/integration/http_stack_test.go`
+2. Delete `internal/cli/run_test.go`
+3. Delete `internal/adapter/spanner/*_test.go` and `internal/adapter/spanner/testutil_test.go`
+4. Revert `.github/workflows/go.yml` to remove the `integration-tests` job
+5. Revert `Makefile` to remove `test-integration` target
+
+No production behavior is affected by any of these deletions.
+
+## Success Criteria
+
+- `go test -race -count=1 ./...` passes with zero new failures and includes `internal/integration/` and `internal/cli/` packages in the run
+- `go test -tags integration -race -count=1 ./internal/adapter/spanner/...` passes against a running Spanner emulator (`docker compose up -d spanner-emulator spanner-init`)
+- The `integration-tests` CI job is green on a clean `main` push
+- The following specific behaviors are verified by named tests:
+  - `TestHTTPStack_PostQuotes_Unauthorized` confirms 401 without `Authorization` header
+  - `TestHTTPStack_SecurityHeaders` confirms `X-Content-Type-Options: nosniff` is present
+  - `TestHTTPStack_ConcurrencyLimit` confirms 503 when semaphore is full
+  - `TestQuoteRepo_FindByRequestID_IgnoresExpired` confirms expired rows are not returned
+  - `TestCarrierRepo_ListActive_DecodesConfig` confirms `NullJSON` → `domain.CarrierConfig` round-trip
+  - `TestAppetiteRepo_FindMatchingRules_WithClassCode` confirms `NULL ClassCode` acts as wildcard
+  - `TestRun_MissingAPIKeys` confirms `cli.Run` returns a non-nil error immediately when `API_KEYS` is empty
+  - `TestRun_CleanShutdown` confirms `cli.Run` returns nil after context cancellation
+
+
+--- SPECIFICATIONS ---
+
+### spec.md
+
+# Delta Spec: Integration and E2E Testing
+
+**Change**: integration-e2e-testing
+**Date**: 2026-03-22T00:00:00Z
+**Status**: draft
+**Depends On**: proposal.md
+
+---
+
+## Context
+
+This change adds integration and E2E tests to close three hard coverage gaps in riskforge: (1) the fully assembled HTTP middleware chain (`AuditLog -> SecurityHeaders -> RequireAPIKey -> LimitConcurrency -> mux -> Handler -> Orchestrator`), (2) the Spanner adapter repositories (`QuoteRepo`, `CarrierRepo`, `AppetiteRepo`) which have zero test files, and (3) the `cli.Run` startup/shutdown lifecycle which also has zero test files. No existing specs exist -- all requirements are ADDED.
+
+---
+
+## ADDED Requirements
+
+---
+
+### Domain: http-stack
+
+### REQ-HTTP-STACK-001: Authenticated POST /quotes Returns Valid JSON Response
+
+The test suite **MUST** wire the full production middleware chain identically to `cli.Run` (lines 178-184 of `internal/cli/run.go`): `AuditLog -> SecurityHeaders -> RequireAPIKey -> LimitConcurrency -> mux -> Handler -> Orchestrator`, using `httptest.NewServer` with a real `net.Listener` and mock carriers. An authenticated `POST /quotes` with a valid body **MUST** return HTTP 200 with `Content-Type: application/json` and a non-empty `quotes` array in the response body.
+
+#### Scenario: Happy path POST /quotes with valid auth and body · `code-based` · `critical`
+
+- **WHEN** a `POST /quotes` request is sent to the assembled stack with header `Authorization: Bearer test-key-abc` and body `{"request_id":"integ-001","coverage_lines":["auto"],"timeout_ms":5000}`
+- **THEN** the response status code is `200`, the `Content-Type` header is `application/json`, and the decoded JSON body contains a `quotes` array with length >= 1 where each element has non-empty `carrier_id` and `premium_cents` > 0
+
+#### Scenario: Response includes request_id and duration_ms fields · `code-based` · `critical`
+
+- **WHEN** a `POST /quotes` request is sent with `request_id` set to `"integ-002"` and valid auth
+- **THEN** the decoded JSON response has `request_id` equal to `"integ-002"` and `duration_ms` >= 0
+
+---
+
+### REQ-HTTP-STACK-002: Unauthenticated Requests to /quotes Return 401
+
+The middleware chain **MUST** reject requests to protected endpoints that lack a valid `Authorization: Bearer <key>` header with HTTP 401 and a JSON error body.
+
+#### Scenario: Missing Authorization header returns 401 · `code-based` · `critical`
+
+- **WHEN** a `POST /quotes` request is sent to the assembled stack with no `Authorization` header and body `{"request_id":"integ-003","coverage_lines":["auto"]}`
+- **THEN** the response status code is `401` and the body contains `"UNAUTHORIZED"`
+
+#### Scenario: Invalid Bearer token returns 401 · `code-based` · `critical`
+
+- **WHEN** a `POST /quotes` request is sent with header `Authorization: Bearer wrong-key-999` where `wrong-key-999` is not in the configured API keys
+- **THEN** the response status code is `401` and the body contains `"UNAUTHORIZED"`
+
+---
+
+### REQ-HTTP-STACK-003: SecurityHeaders Middleware Sets All Required Headers
+
+The `SecurityHeaders` middleware **MUST** set the five security headers defined in `internal/middleware/security.go` on every response. The test **MUST** verify the actual header values from the source code: `X-Content-Type-Options: nosniff`, `Strict-Transport-Security: max-age=63072000; includeSubDomains`, `X-Frame-Options: DENY`, `Cache-Control: no-store`, `Content-Security-Policy: default-src 'none'`.
+
+Note: The proposal mentions `Referrer-Policy: no-referrer` but this header is NOT set by `SecurityHeaders` in the actual source (`internal/middleware/security.go` lines 7-15). Specs align with source code, not the proposal narrative.
+
+#### Scenario: All five security headers present on authenticated request · `code-based` · `critical`
+
+- **WHEN** a `POST /quotes` request is sent with valid auth and body to the assembled stack
+- **THEN** the response includes headers: `X-Content-Type-Options` = `nosniff`, `X-Frame-Options` = `DENY`, `Strict-Transport-Security` = `max-age=63072000; includeSubDomains`, `Cache-Control` = `no-store`, `Content-Security-Policy` = `default-src 'none'`
+
+#### Scenario: Security headers present even on error responses · `code-based` · `critical`
+
+- **WHEN** a `POST /quotes` request is sent with valid auth but an empty body (triggering a 400)
+- **THEN** the response status code is `400` AND the `X-Content-Type-Options` header is `nosniff` AND the `X-Frame-Options` header is `DENY`
+
+---
+
+### REQ-HTTP-STACK-004: LimitConcurrency Returns 503 When Semaphore Is Full
+
+The `LimitConcurrency` middleware **MUST** return HTTP 503 with `Retry-After: 1` header when the configured concurrency limit is reached. The test **MUST** fill the semaphore to capacity, then issue one additional request and verify the 503 response.
+
+#### Scenario: Overflow request receives 503 when semaphore is full · `code-based` · `critical`
+
+- **GIVEN** the concurrency limit is set to `N` (e.g., 2) and `N` goroutines each hold a slot by making requests to a handler that blocks until signaled
+- **WHEN** one additional `POST /quotes` request is sent with valid auth
+- **THEN** the response status code is `503` and the `Retry-After` header is `"1"` and the body contains `"SERVICE_UNAVAILABLE"`
+
+#### Scenario: Requests succeed after semaphore slots are released · `code-based` · `standard`
+
+- **GIVEN** the concurrency limit is `2` and both slots were previously full but one blocking request has completed
+- **WHEN** a new `POST /quotes` request is sent with valid auth and valid body
+- **THEN** the response status code is `200`
+
+---
+
+### REQ-HTTP-STACK-005: Health, Readiness, and Metrics Endpoints Bypass Auth
+
+The paths `/healthz`, `/readyz`, and `/metrics` **MUST** be accessible without an `Authorization` header, as configured by the `skipPaths` parameter in `RequireAPIKey` (line 176 of `internal/cli/run.go`).
+
+#### Scenario: GET /healthz returns 200 without auth · `code-based` · `critical`
+
+- **WHEN** a `GET /healthz` request is sent to the assembled stack with no `Authorization` header
+- **THEN** the response status code is `200` and the body is `"ok"`
+
+#### Scenario: GET /readyz returns 200 without auth · `code-based` · `critical`
+
+- **WHEN** a `GET /readyz` request is sent to the assembled stack with no `Authorization` header
+- **THEN** the response status code is `200` and the body is `"ok"`
+
+#### Scenario: GET /metrics returns 200 without auth · `code-based` · `critical`
+
+- **WHEN** a `GET /metrics` request is sent to the assembled stack with no `Authorization` header
+- **THEN** the response status code is `200`
+
+---
+
+### REQ-HTTP-STACK-006: Test Cleanup Prevents Goroutine Leaks
+
+Each HTTP stack test **MUST** call `t.Cleanup(srv.Close)` for the `httptest.Server` and `t.Cleanup(stopAuth)` for the auth middleware's cleanup function. The test binary **MUST** pass with `-race` flag without goroutine leak warnings.
+
+#### Scenario: stopAuth is called on test cleanup · `code-based` · `critical`
+
+- **WHEN** an HTTP stack test completes (pass or fail)
+- **THEN** `stopAuth()` returned by `middleware.RequireAPIKey` has been invoked via `t.Cleanup`, and the auth failure limiter background goroutine is stopped
+
+#### Scenario: Race detector passes on HTTP stack tests · `code-based` · `critical`
+
+- **WHEN** `go test -race ./internal/integration/...` is executed
+- **THEN** the test binary exits with code 0 and no race conditions are reported
+
+---
+
+### Domain: spanner-quote-repo
+
+### REQ-QUOTE-REPO-001: Save and FindByRequestID Round-Trip
+
+The `QuoteRepo` integration tests **MUST** use the `//go:build integration` build tag and connect to the Spanner emulator via `newEmulatorClient(t)`. `QuoteRepo.Save` followed by `QuoteRepo.FindByRequestID` for the same `requestID` **MUST** return the saved results with `found == true`, correct `PremiumCents` values, and results ordered by `PremiumCents ASC`.
+
+#### Scenario: Save two results then find both by requestID · `code-based` · `critical`
+
+- **WHEN** `QuoteRepo.Save(ctx, "req-save-001", results)` is called with two `domain.QuoteResult` entries having `PremiumCents` 5000 and 3000, then `QuoteRepo.FindByRequestID(ctx, "req-save-001")` is called
+- **THEN** `found` is `true`, `len(results)` is `2`, `results[0].Premium.Amount` is `3000` (lowest first), and `results[1].Premium.Amount` is `5000`
+
+#### Scenario: FindByRequestID for unknown ID returns not found · `code-based` · `critical`
+
+- **WHEN** `QuoteRepo.FindByRequestID(ctx, "nonexistent-req-999")` is called without any prior `Save` for that ID
+- **THEN** `found` is `false`, `results` is `nil`, and `err` is `nil`
+
+---
+
+### REQ-QUOTE-REPO-002: FindByRequestID Filters Expired Rows
+
+`QuoteRepo.FindByRequestID` **MUST** only return rows where `ExpiresAt > CURRENT_TIMESTAMP()` as specified by the SQL in `internal/adapter/spanner/quote_repo.go` line 53. Rows with `ExpiresAt` in the past **MUST NOT** be returned.
+
+#### Scenario: Expired row is not returned by FindByRequestID · `code-based` · `critical`
+
+- **GIVEN** a quote row exists in the `Quotes` table with `RequestID = "req-expired-001"` and `ExpiresAt` set to `2020-01-01T00:00:00Z` (in the past), inserted via a direct Spanner mutation to bypass `CommitTimestamp` constraints
+- **WHEN** `QuoteRepo.FindByRequestID(ctx, "req-expired-001")` is called
+- **THEN** `found` is `false` and `results` is `nil`
+
+#### Scenario: Mix of expired and valid rows returns only valid · `code-based` · `critical`
+
+- **GIVEN** two quote rows exist for `RequestID = "req-mixed-001"`: one with `ExpiresAt` 1 hour in the future and one with `ExpiresAt` in the past
+- **WHEN** `QuoteRepo.FindByRequestID(ctx, "req-mixed-001")` is called
+- **THEN** `found` is `true` and `len(results)` is `1`
+
+---
+
+### REQ-QUOTE-REPO-003: DeleteExpired Removes Expired Rows
+
+`QuoteRepo.DeleteExpired` **MUST** delete all rows where `ExpiresAt <= CURRENT_TIMESTAMP()` using `PartitionedUpdate` and return the count of deleted rows. After deletion, `FindByRequestID` for the deleted request **MUST** return `found == false`.
+
+#### Scenario: DeleteExpired removes expired row and returns count >= 1 · `code-based` · `critical`
+
+- **GIVEN** a quote row exists with `RequestID = "req-del-001"` and `ExpiresAt` in the past (inserted via direct Spanner mutation)
+- **WHEN** `QuoteRepo.DeleteExpired(ctx)` is called
+- **THEN** the returned `count` is >= 1 and `err` is `nil`
+
+#### Scenario: FindByRequestID misses after DeleteExpired · `code-based` · `critical`
+
+- **GIVEN** `DeleteExpired` was called and removed the row for `RequestID = "req-del-001"`
+- **WHEN** `QuoteRepo.FindByRequestID(ctx, "req-del-001")` is called
+- **THEN** `found` is `false`
+
+---
+
+### REQ-QUOTE-REPO-004: Emulator Absence Causes Graceful Skip
+
+When the Spanner emulator is not available, integration tests **MUST** skip gracefully rather than fail. The `newEmulatorClient(t)` helper **MUST** call `t.Skip` when `SPANNER_EMULATOR_HOST` is unset.
+
+#### Scenario: SPANNER_EMULATOR_HOST unset causes t.Skip · `code-based` · `critical`
+
+- **GIVEN** the environment variable `SPANNER_EMULATOR_HOST` is empty or unset
+- **WHEN** `newEmulatorClient(t)` is called
+- **THEN** `t.Skip` is invoked with a message containing `"SPANNER_EMULATOR_HOST not set"` and no test failure is recorded
+
+#### Scenario: SPANNER_EMULATOR_HOST set returns valid client · `code-based` · `critical`
+
+- **GIVEN** the environment variable `SPANNER_EMULATOR_HOST` is set to `localhost:9010` and the emulator is running
+- **WHEN** `newEmulatorClient(t)` is called
+- **THEN** the returned `*spanner.Client` is non-nil and `t.Cleanup` has been registered to call `client.Close()`
+
+---
+
+### Domain: spanner-carrier-repo
+
+### REQ-CARRIER-REPO-001: ListActive Returns Only Active Carriers
+
+`CarrierRepo.ListActive` **MUST** return only rows where `IsActive = true` from the `Carriers` table. Inactive carriers **MUST NOT** appear in the result.
+
+#### Scenario: ListActive filters inactive carriers · `code-based` · `critical`
+
+- **GIVEN** the `Carriers` table contains 3 rows: `carrier-a` (IsActive=true), `carrier-b` (IsActive=true), `carrier-c` (IsActive=false), inserted via direct Spanner mutations
+- **WHEN** `CarrierRepo.ListActive(ctx)` is called
+- **THEN** the returned slice has length `2` and contains only carriers with IDs `carrier-a` and `carrier-b`
+
+#### Scenario: ListActive with all inactive returns empty slice · `code-based` · `standard`
+
+- **GIVEN** only inactive carrier rows exist in the `Carriers` table
+- **WHEN** `CarrierRepo.ListActive(ctx)` is called
+- **THEN** the returned slice is empty (length 0) and `err` is `nil`
+
+---
+
+### REQ-CARRIER-REPO-002: ListActive Decodes NullJSON Config to domain.CarrierConfig
+
+`CarrierRepo.ListActive` **MUST** correctly decode the `Config` column (Spanner `JSON` type read as `spanner.NullJSON`) into `domain.CarrierConfig` via `json.Marshal` -> `json.Unmarshal`. The positional column ordering `CarrierId, Name, Code, Config` in the SQL SELECT (line 25 of `internal/adapter/spanner/carrier_repo.go`) **MUST** match the `row.Columns(&id, &name, &code, &configJSON)` scan order (line 34).
+
+#### Scenario: JSON Config round-trip preserves field values · `code-based` · `critical`
+
+- **GIVEN** the `Carriers` table has one active row with `CarrierId = "carrier-cfg"`, `Name = "Config Test"`, `Code = "CFG"`, and `Config` containing JSON `{"TimeoutHint": 150000000, "FailureThreshold": 3, "RateLimit": {"TokensPerSecond": 50, "Burst": 5}}`
+- **WHEN** `CarrierRepo.ListActive(ctx)` is called
+- **THEN** the returned carrier has `Config.TimeoutHint` equal to `150ms`, `Config.FailureThreshold` equal to `3`, and `Config.RateLimit.TokensPerSecond` equal to `50`
+
+#### Scenario: NULL Config column yields zero-value CarrierConfig · `code-based` · `critical`
+
+- **GIVEN** the `Carriers` table has one active row with `Config = NULL`
+- **WHEN** `CarrierRepo.ListActive(ctx)` is called
+- **THEN** the returned carrier has `Config` equal to the zero value of `domain.CarrierConfig{}` (all fields are zero/default)
+
+---
+
+### Domain: spanner-appetite-repo
+
+### REQ-APPETITE-REPO-001: FindMatchingRules Filters by Required Fields (State + LOB)
+
+`AppetiteRepo.FindMatchingRules` **MUST** filter by `State` and `LineOfBusiness` as required parameters. Only rules matching both fields **MUST** be returned.
+
+#### Scenario: Match by state and LOB returns correct rules · `code-based` · `critical`
+
+- **GIVEN** the `AppetiteRules` table has two active rules: rule-1 with `State="CA"`, `LineOfBusiness="auto"` and rule-2 with `State="NY"`, `LineOfBusiness="auto"`
+- **WHEN** `AppetiteRepo.FindMatchingRules(ctx, domain.RiskClassification{State: "CA", LineOfBusiness: "auto"})` is called
+- **THEN** the returned slice has length `1` and `rules[0].State` is `"CA"`
+
+#### Scenario: No matching rules returns empty slice and nil error · `code-based` · `critical`
+
+- **WHEN** `AppetiteRepo.FindMatchingRules(ctx, domain.RiskClassification{State: "ZZ", LineOfBusiness: "nonexistent"})` is called with no seeded data for that state/LOB combination
+- **THEN** the returned slice is empty (length 0) and `err` is `nil`
+
+---
+
+### REQ-APPETITE-REPO-002: FindMatchingRules Treats NULL ClassCode as Wildcard
+
+When `risk.ClassCode` is provided, `FindMatchingRules` **MUST** include rules where `ClassCode IS NULL` (wildcard) in addition to rules where `ClassCode` matches the provided value, per the SQL clause `ClassCode IS NULL OR ClassCode = @classCode` at line 33 of `internal/adapter/spanner/appetite_repo.go`.
+
+#### Scenario: NULL ClassCode rule matches any classCode query · `code-based` · `critical`
+
+- **GIVEN** two active rules exist: rule-cc1 with `State="CA"`, `LineOfBusiness="auto"`, `ClassCode="auto-commercial"` and rule-cc2 with `State="CA"`, `LineOfBusiness="auto"`, `ClassCode=NULL`
+- **WHEN** `FindMatchingRules(ctx, domain.RiskClassification{State: "CA", LineOfBusiness: "auto", ClassCode: "auto-commercial"})` is called
+- **THEN** the returned slice has length `2` (both rules match — one by exact ClassCode, one by NULL wildcard)
+
+#### Scenario: Query without classCode skips ClassCode filter entirely · `code-based` · `critical`
+
+- **GIVEN** an active rule exists with `State="CA"`, `LineOfBusiness="auto"`, `ClassCode="auto-commercial"`
+- **WHEN** `FindMatchingRules(ctx, domain.RiskClassification{State: "CA", LineOfBusiness: "auto", ClassCode: ""})` is called (empty ClassCode)
+- **THEN** the returned slice has length `1` (the ClassCode filter clause is not appended to the SQL when `ClassCode == ""`)
+
+---
+
+### REQ-APPETITE-REPO-003: FindMatchingRules Applies Premium Range Filter
+
+When `risk.EstimatedPremium > 0`, `FindMatchingRules` **MUST** add the premium range filter: `(MinPremium IS NULL OR MinPremium <= @premium) AND (MaxPremium IS NULL OR MaxPremium >= @premium)` per lines 38-39 of `internal/adapter/spanner/appetite_repo.go`.
+
+#### Scenario: Premium within range matches · `code-based` · `critical`
+
+- **GIVEN** an active rule exists with `State="CA"`, `LineOfBusiness="auto"`, `MinPremium=1000`, `MaxPremium=5000`
+- **WHEN** `FindMatchingRules(ctx, domain.RiskClassification{State: "CA", LineOfBusiness: "auto", EstimatedPremium: 3000})` is called
+- **THEN** the returned slice has length `1`
+
+#### Scenario: Premium outside range does not match · `code-based` · `critical`
+
+- **GIVEN** the same rule as above with `MinPremium=1000`, `MaxPremium=5000`
+- **WHEN** `FindMatchingRules(ctx, domain.RiskClassification{State: "CA", LineOfBusiness: "auto", EstimatedPremium: 6000})` is called
+- **THEN** the returned slice is empty (length 0) and `err` is `nil`
+
+---
+
+### REQ-APPETITE-REPO-004: ListAll Returns All Active Rules
+
+`AppetiteRepo.ListAll` **MUST** return all rows from `AppetiteRules` where `IsActive = true`, regardless of state, LOB, or other filters.
+
+#### Scenario: ListAll returns all active rules across states · `code-based` · `critical`
+
+- **GIVEN** the `AppetiteRules` table has 3 active rules across states `"CA"`, `"NY"`, `"TX"`
+- **WHEN** `AppetiteRepo.ListAll(ctx)` is called
+- **THEN** the returned slice has length `3`
+
+#### Scenario: ListAll excludes inactive rules · `code-based` · `standard`
+
+- **GIVEN** the `AppetiteRules` table has 2 active rules and 1 inactive rule
+- **WHEN** `AppetiteRepo.ListAll(ctx)` is called
+- **THEN** the returned slice has length `2`
+
+---
+
+### Domain: cli-lifecycle
+
+### REQ-CLI-LIFECYCLE-001: Missing API_KEYS Returns Error Immediately
+
+`cli.Run` **MUST** return a non-nil error immediately (without starting the HTTP server) when the `API_KEYS` environment variable is empty or unset. The error message **MUST** contain the string `"API_KEYS environment variable required"` as specified at line 42 of `internal/cli/run.go`.
+
+#### Scenario: Empty API_KEYS returns error without blocking · `code-based` · `critical`
+
+- **WHEN** `cli.Run(ctx, nil, io.Discard, io.Discard)` is called with `API_KEYS` set to `""` via `t.Setenv`
+- **THEN** the returned error is non-nil, `err.Error()` contains `"API_KEYS environment variable required"`, and the call returns within 1 second (no blocking on server listen)
+
+#### Scenario: Unset API_KEYS returns same error · `code-based` · `critical`
+
+- **GIVEN** the `API_KEYS` environment variable is not set at all (default empty)
+- **WHEN** `cli.Run(ctx, nil, io.Discard, io.Discard)` is called
+- **THEN** the returned error is non-nil and contains `"API_KEYS environment variable required"`
+
+---
+
+### REQ-CLI-LIFECYCLE-002: Clean Shutdown via Context Cancellation
+
+`cli.Run` **MUST** start an HTTP server that responds on `/healthz` and **MUST** return `nil` when the parent context is cancelled. The test **MUST** use an ephemeral port obtained via `net.Listen("tcp", ":0")` to avoid port collisions, and **MUST** poll `/healthz` for readiness rather than using a fixed sleep.
+
+#### Scenario: Server starts and responds to /healthz then shuts down cleanly · `code-based` · `critical`
+
+- **GIVEN** `API_KEYS` is set to `"test-key-abc"` and `PORT` is set to an OS-assigned ephemeral port via `t.Setenv`
+- **WHEN** `cli.Run(ctx, nil, io.Discard, io.Discard)` is called in a goroutine, `/healthz` is polled until HTTP 200 is received (within 2 seconds), and then the context is cancelled
+- **THEN** `cli.Run` returns `nil` within 5 seconds
+
+#### Scenario: Server does not block indefinitely after context cancel · `code-based` · `critical`
+
+- **GIVEN** `cli.Run` is running in a goroutine with a valid `API_KEYS` and ephemeral `PORT`
+- **WHEN** the parent `context.Context` is cancelled
+- **THEN** the goroutine returns (does not hang) because `<-ctx.Done()` fires at `internal/cli/run.go` line 204 even though `signal.NotifyContext` wraps the context at line 45
+
+---
+
+### Domain: ci-integration
+
+### REQ-CI-INTEGRATION-001: Integration Tests CI Job Uses Spanner Emulator
+
+The `.github/workflows/go.yml` workflow **MUST** include a new `integration-tests` job that starts the Spanner emulator via `docker compose up -d spanner-emulator spanner-init`, waits for the emulator to be ready, and runs `go test -tags integration -race -count=1 ./internal/adapter/spanner/...` with the correct environment variables.
+
+#### Scenario: CI job sets required environment variables · `code-based` · `critical`
+
+- **WHEN** the `integration-tests` job runs
+- **THEN** the `go test` step has environment variables `SPANNER_EMULATOR_HOST=localhost:9010`, `SPANNER_PROJECT=riskforge-dev`, `SPANNER_INSTANCE=test-instance`, `SPANNER_DATABASE=test-db`
+
+#### Scenario: CI job is independent of build-and-test job · `code-based` · `critical`
+
+- **WHEN** the `integration-tests` job is defined in the workflow
+- **THEN** it does not have a `needs:` dependency on the `build-and-test` job (they run in parallel), so a Spanner emulator failure does not block the fast-path unit test job
+
+---
+
+### REQ-CI-INTEGRATION-002: Makefile Includes test-integration Target
+
+The `Makefile` **MUST** include a `test-integration` target that starts the Spanner emulator via `docker compose up -d` and runs `go test -tags integration -race -count=1 ./internal/adapter/spanner/...`.
+
+#### Scenario: make test-integration runs integration tests · `code-based` · `standard`
+
+- **WHEN** `make test-integration` is invoked
+- **THEN** it executes `docker compose up -d` followed by `go test -tags integration -race -count=1 ./internal/adapter/spanner/...`
+
+#### Scenario: make test-integration is additive to existing test target · `code-based` · `standard`
+
+- **WHEN** the `Makefile` is inspected
+- **THEN** the existing `test` target (`go test -race -count=1 ./...`) is unchanged and `test-integration` is a separate target
+
+---
+
+### REQ-CI-INTEGRATION-003: Integration Test Build Tag Isolation
+
+All Spanner adapter test files **MUST** use `//go:build integration` as the first line. These tests **MUST NOT** run during `go test ./...` (without the `-tags integration` flag). Standard test suite (`go test -race -count=1 ./...`) **MUST** continue to pass with zero new failures.
+
+#### Scenario: go test ./... does not execute Spanner integration tests · `code-based` · `critical`
+
+- **WHEN** `go test ./...` is run without `-tags integration`
+- **THEN** no test functions from `internal/adapter/spanner/*_test.go` are executed (they are excluded by the build tag)
+
+#### Scenario: go test -tags integration includes Spanner tests · `code-based` · `critical`
+
+- **GIVEN** the Spanner emulator is running and `SPANNER_EMULATOR_HOST` is set
+- **WHEN** `go test -tags integration -race -count=1 ./internal/adapter/spanner/...` is run
+- **THEN** all `Test*` functions in `quote_repo_test.go`, `carrier_repo_test.go`, and `appetite_repo_test.go` are executed and pass
+
+---
+
+## Acceptance Criteria Summary
+
+| Requirement ID | Type | Priority | Scenarios |
+|---|---|---|---|
+| REQ-HTTP-STACK-001 | ADDED | MUST | 2 |
+| REQ-HTTP-STACK-002 | ADDED | MUST | 2 |
+| REQ-HTTP-STACK-003 | ADDED | MUST | 2 |
+| REQ-HTTP-STACK-004 | ADDED | MUST | 2 |
+| REQ-HTTP-STACK-005 | ADDED | MUST | 3 |
+| REQ-HTTP-STACK-006 | ADDED | MUST | 2 |
+| REQ-QUOTE-REPO-001 | ADDED | MUST | 2 |
+| REQ-QUOTE-REPO-002 | ADDED | MUST | 2 |
+| REQ-QUOTE-REPO-003 | ADDED | MUST | 2 |
+| REQ-QUOTE-REPO-004 | ADDED | MUST | 2 |
+| REQ-CARRIER-REPO-001 | ADDED | MUST | 2 |
+| REQ-CARRIER-REPO-002 | ADDED | MUST | 2 |
+| REQ-APPETITE-REPO-001 | ADDED | MUST | 2 |
+| REQ-APPETITE-REPO-002 | ADDED | MUST | 2 |
+| REQ-APPETITE-REPO-003 | ADDED | MUST | 2 |
+| REQ-APPETITE-REPO-004 | ADDED | MUST | 2 |
+| REQ-CLI-LIFECYCLE-001 | ADDED | MUST | 2 |
+| REQ-CLI-LIFECYCLE-002 | ADDED | MUST | 2 |
+| REQ-CI-INTEGRATION-001 | ADDED | MUST | 2 |
+| REQ-CI-INTEGRATION-002 | ADDED | MUST | 2 |
+| REQ-CI-INTEGRATION-003 | ADDED | MUST | 2 |
+
+**Total Requirements**: 21
+**Total Scenarios**: 43
+
+---
+
+## Eval Definitions
+
+| Scenario | Eval Type | Criticality | Threshold |
+|---|---|---|---|
+| REQ-HTTP-STACK-001 > Happy path POST /quotes with valid auth and body | code-based | critical | pass^3 = 1.00 |
+| REQ-HTTP-STACK-001 > Response includes request_id and duration_ms fields | code-based | critical | pass^3 = 1.00 |
+| REQ-HTTP-STACK-002 > Missing Authorization header returns 401 | code-based | critical | pass^3 = 1.00 |
+| REQ-HTTP-STACK-002 > Invalid Bearer token returns 401 | code-based | critical | pass^3 = 1.00 |
+| REQ-HTTP-STACK-003 > All five security headers present on authenticated request | code-based | critical | pass^3 = 1.00 |
+| REQ-HTTP-STACK-003 > Security headers present even on error responses | code-based | critical | pass^3 = 1.00 |
+| REQ-HTTP-STACK-004 > Overflow request receives 503 when semaphore is full | code-based | critical | pass^3 = 1.00 |
+| REQ-HTTP-STACK-004 > Requests succeed after semaphore slots are released | code-based | standard | pass@3 >= 0.90 |
+| REQ-HTTP-STACK-005 > GET /healthz returns 200 without auth | code-based | critical | pass^3 = 1.00 |
+| REQ-HTTP-STACK-005 > GET /readyz returns 200 without auth | code-based | critical | pass^3 = 1.00 |
+| REQ-HTTP-STACK-005 > GET /metrics returns 200 without auth | code-based | critical | pass^3 = 1.00 |
+| REQ-HTTP-STACK-006 > stopAuth is called on test cleanup | code-based | critical | pass^3 = 1.00 |
+| REQ-HTTP-STACK-006 > Race detector passes on HTTP stack tests | code-based | critical | pass^3 = 1.00 |
+| REQ-QUOTE-REPO-001 > Save two results then find both by requestID | code-based | critical | pass^3 = 1.00 |
+| REQ-QUOTE-REPO-001 > FindByRequestID for unknown ID returns not found | code-based | critical | pass^3 = 1.00 |
+| REQ-QUOTE-REPO-002 > Expired row is not returned by FindByRequestID | code-based | critical | pass^3 = 1.00 |
+| REQ-QUOTE-REPO-002 > Mix of expired and valid rows returns only valid | code-based | critical | pass^3 = 1.00 |
+| REQ-QUOTE-REPO-003 > DeleteExpired removes expired row and returns count >= 1 | code-based | critical | pass^3 = 1.00 |
+| REQ-QUOTE-REPO-003 > FindByRequestID misses after DeleteExpired | code-based | critical | pass^3 = 1.00 |
+| REQ-QUOTE-REPO-004 > SPANNER_EMULATOR_HOST unset causes t.Skip | code-based | critical | pass^3 = 1.00 |
+| REQ-QUOTE-REPO-004 > SPANNER_EMULATOR_HOST set returns valid client | code-based | critical | pass^3 = 1.00 |
+| REQ-CARRIER-REPO-001 > ListActive filters inactive carriers | code-based | critical | pass^3 = 1.00 |
+| REQ-CARRIER-REPO-001 > ListActive with all inactive returns empty slice | code-based | standard | pass@3 >= 0.90 |
+| REQ-CARRIER-REPO-002 > JSON Config round-trip preserves field values | code-based | critical | pass^3 = 1.00 |
+| REQ-CARRIER-REPO-002 > NULL Config column yields zero-value CarrierConfig | code-based | critical | pass^3 = 1.00 |
+| REQ-APPETITE-REPO-001 > Match by state and LOB returns correct rules | code-based | critical | pass^3 = 1.00 |
+| REQ-APPETITE-REPO-001 > No matching rules returns empty slice and nil error | code-based | critical | pass^3 = 1.00 |
+| REQ-APPETITE-REPO-002 > NULL ClassCode rule matches any classCode query | code-based | critical | pass^3 = 1.00 |
+| REQ-APPETITE-REPO-002 > Query without classCode skips ClassCode filter entirely | code-based | critical | pass^3 = 1.00 |
+| REQ-APPETITE-REPO-003 > Premium within range matches | code-based | critical | pass^3 = 1.00 |
+| REQ-APPETITE-REPO-003 > Premium outside range does not match | code-based | critical | pass^3 = 1.00 |
+| REQ-APPETITE-REPO-004 > ListAll returns all active rules across states | code-based | critical | pass^3 = 1.00 |
+| REQ-APPETITE-REPO-004 > ListAll excludes inactive rules | code-based | standard | pass@3 >= 0.90 |
+| REQ-CLI-LIFECYCLE-001 > Empty API_KEYS returns error without blocking | code-based | critical | pass^3 = 1.00 |
+| REQ-CLI-LIFECYCLE-001 > Unset API_KEYS returns same error | code-based | critical | pass^3 = 1.00 |
+| REQ-CLI-LIFECYCLE-002 > Server starts and responds to /healthz then shuts down cleanly | code-based | critical | pass^3 = 1.00 |
+| REQ-CLI-LIFECYCLE-002 > Server does not block indefinitely after context cancel | code-based | critical | pass^3 = 1.00 |
+| REQ-CI-INTEGRATION-001 > CI job sets required environment variables | code-based | critical | pass^3 = 1.00 |
+| REQ-CI-INTEGRATION-001 > CI job is independent of build-and-test job | code-based | critical | pass^3 = 1.00 |
+| REQ-CI-INTEGRATION-002 > make test-integration runs integration tests | code-based | standard | pass@3 >= 0.90 |
+| REQ-CI-INTEGRATION-002 > make test-integration is additive to existing test target | code-based | standard | pass@3 >= 0.90 |
+| REQ-CI-INTEGRATION-003 > go test ./... does not execute Spanner integration tests | code-based | critical | pass^3 = 1.00 |
+| REQ-CI-INTEGRATION-003 > go test -tags integration includes Spanner tests | code-based | critical | pass^3 = 1.00 |
+

@@ -1,0 +1,559 @@
+
+--- SKILL ---
+
+---
+name: sdd-spec
+description: >
+  Write delta specifications (ADDED/MODIFIED/REMOVED requirements) with Given/When/Then scenarios using RFC 2119 keywords.
+  Trigger: When user runs /sdd-continue after proposal is approved, or after sdd-propose completes.
+license: MIT
+metadata:
+  version: "1.0"
+---
+
+# SDD Spec
+
+You are executing the **spec** phase inline. Specifications define WHAT the system must do after the change is applied, expressed as requirements with testable scenarios. You use RFC 2119 keywords for precision and Given/When/Then scenarios for verifiability.
+
+## Activation
+
+User runs `/sdd-continue` or `/sdd-spec` after the proposal is approved. Reads `openspec/changes/{changeName}/proposal.md` and `openspec/specs/` for existing context.
+
+## Execution Steps
+
+### Step 1: Load Project Context
+
+1. Read `openspec/config.yaml` for:
+   - Spec phase rules (`phases.specs`)
+   - RFC 2119 keyword usage
+   - Scenario format (Given/When/Then)
+   - Minimum scenarios per requirement
+2. Read project conventions relevant to specs (type strictness, error handling, testing patterns).
+
+### Step 2: Read Proposal
+
+1. Read `proposal.md` at the provided path.
+2. Extract:
+   - Intent (what the change accomplishes)
+   - In-scope items (each becomes a spec domain or requirement group)
+   - Affected areas (files and modules that will change)
+   - Success criteria (each maps to one or more requirements)
+   - Out-of-scope items (ensure specs do not accidentally cover these)
+3. If the proposal has unresolved open questions, warn in the output but proceed with available information.
+
+### Step 3: Read Existing Specs
+
+1. If `openspec/specs/` contains existing spec files, read them for context.
+2. Existing specs represent the CURRENT system behavior.
+3. Delta specs describe CHANGES to this baseline:
+   - **ADDED**: New behaviors not in the current system
+   - **MODIFIED**: Changed behaviors (must reference what they replace)
+   - **REMOVED**: Deleted behaviors (must explain why)
+4. If no existing specs exist, all requirements are ADDED.
+
+### Step 4: Identify Spec Domains
+
+Group requirements by domain. A domain is a logical area of the system:
+
+| Domain Type       | Example Domains                              |
+|-------------------|----------------------------------------------|
+| API               | auth-api, users-api, payments-api            |
+| Data              | user-schema, session-schema, migration       |
+| Business Logic    | auth-flow, permission-rules, pricing-engine  |
+| UI                | login-form, dashboard-layout, settings-page  |
+| Infrastructure    | database-connection, cache-layer, queue      |
+| Integration       | oauth-provider, email-service, webhook       |
+
+Each in-scope item from the proposal maps to one or more domains.
+
+### Step 5: Write Delta Spec Files
+
+For each domain, create a spec file:
+
+**Path**: `openspec/changes/{change_name}/specs/{domain}/spec.md`
+
+Each spec file follows this structure:
+
+```markdown
+# Delta Spec: {Domain Name (title case)}
+
+**Change**: {change_name}
+**Date**: {ISO 8601 timestamp}
+**Status**: draft
+**Depends On**: proposal.md
+
+---
+
+## Context
+
+{Brief description of this domain's role in the change. Reference the proposal intent and relevant existing specs if any.}
+
+## ADDED Requirements
+
+### REQ-{DOMAIN}-{NNN}: {Requirement Title}
+
+{Requirement description using RFC 2119 keywords.}
+
+The system **MUST** {required behavior}.
+The system **SHALL** {required behavior}.
+The system **SHOULD** {recommended behavior}.
+The system **MAY** {optional behavior}.
+
+#### Scenario: {Scenario Title} · `code-based` · `critical`
+
+- **WHEN** {action - specific trigger or input}
+- **THEN** {outcome - specific, observable, verifiable result}
+
+#### Scenario: {Edge Case Title} · `code-based` · `critical`
+
+- **GIVEN** {non-obvious precondition that changes the outcome}
+- **WHEN** {action that triggers edge case}
+- **THEN** {expected handling of edge case}
+
+---
+
+## MODIFIED Requirements
+
+### REQ-{DOMAIN}-{NNN}: {Requirement Title}
+
+**Previously**: {Reference to existing spec or description of current behavior}
+
+{New requirement description using RFC 2119 keywords.}
+
+The system **MUST** now {changed behavior} instead of {old behavior}.
+
+#### Scenario: {Scenario showing new behavior} · `code-based` · `critical`
+
+- **WHEN** {action}
+- **THEN** {new outcome, different from previous behavior}
+
+---
+
+## REMOVED Requirements
+
+### REQ-{DOMAIN}-{NNN}: {Requirement Title}
+
+**Reason**: {Why this requirement is being removed}
+
+**Previously**: {What the system used to do}
+
+**Migration**: {How existing users/data are affected, if applicable}
+
+---
+
+## Acceptance Criteria Summary
+
+| Requirement ID       | Type     | Priority   | Scenarios |
+|----------------------|----------|------------|-----------|
+| REQ-{DOMAIN}-001    | ADDED    | MUST       | 2         |
+| REQ-{DOMAIN}-002    | ADDED    | SHOULD     | 1         |
+| REQ-{DOMAIN}-003    | MODIFIED | MUST       | 2         |
+
+**Total Requirements**: {count}
+**Total Scenarios**: {count}
+```
+
+### Step 6: RFC 2119 Keyword Usage
+
+Apply keywords precisely as defined in RFC 2119:
+
+| Keyword          | Meaning                                          | Usage                                |
+|------------------|--------------------------------------------------|--------------------------------------|
+| **MUST**         | Absolute requirement                             | Core functionality, security rules   |
+| **MUST NOT**     | Absolute prohibition                             | Security violations, data corruption |
+| **SHALL**        | Same as MUST (used for variety)                  | Contractual obligations              |
+| **SHALL NOT**    | Same as MUST NOT                                 | Contractual prohibitions             |
+| **SHOULD**       | Recommended, but valid reasons to deviate exist  | Best practices, performance goals    |
+| **SHOULD NOT**   | Discouraged, but valid reasons to include exist  | Anti-patterns with exceptions        |
+| **MAY**          | Truly optional                                   | Nice-to-have features, extensions    |
+
+Rules for keyword usage:
+- Every MUST/SHALL requirement needs at least one scenario proving compliance.
+- Every MUST NOT/SHALL NOT needs at least one scenario proving violation is handled.
+- SHOULD requirements need scenarios but failures are warnings, not blockers.
+- MAY requirements need scenarios to define behavior IF the option is implemented.
+
+### Step 7: Scenario Quality Standards
+
+Each scenario heading MUST include an inline eval type and criticality tag:
+
+```
+#### Scenario: {Title} · `{eval-type}` · `{criticality}`
+```
+
+- `eval-type`: `code-based` | `model-based` | `human-based` (same classification as Step 8b)
+- `criticality`: `critical` | `standard`
+
+This pre-annotates the Eval Definitions table at authoring time — Step 8b reads these tags directly instead of re-classifying.
+
+**GIVEN is optional.** Only include it when the precondition is non-obvious or changes the outcome. Omitting it for straightforward cases keeps scenarios focused on the trigger and result.
+
+- Include GIVEN when: a specific system state, user role, prior action, or data condition materially affects the scenario
+- Omit GIVEN when: the precondition is implied by the requirement context (e.g., "GIVEN a user exists" for a user API requirement)
+
+Each scenario must also be:
+
+1. **Specific**: Use concrete values, not placeholders.
+   - Bad: "WHEN a user submits the form"
+   - Good: "WHEN a POST request is made to `/api/users` with body `{ email: 'test@example.com', role: 'admin' }`"
+
+2. **Independent**: Each scenario tests one behavior path.
+   - Bad: "THEN the user is created AND an email is sent AND the audit log is updated"
+   - Good: Three separate scenarios for creation, email, and audit
+
+3. **Verifiable**: The THEN clause must be observable and map to a single assertion.
+   - Bad: "THEN the system handles the error gracefully"
+   - Good: "THEN the API returns HTTP 400 with body `{ error: 'INVALID_EMAIL', message: 'Email format is invalid' }`"
+
+4. **Aligned with project conventions**:
+   - Reference the project's error handling patterns in THEN clauses where applicable (per CLAUDE.md)
+   - For API specs: include HTTP status codes and response body shapes
+   - For UI specs: reference user-visible states and interactions
+
+### Step 8: Cross-Domain Consistency
+
+After writing all domain specs:
+
+1. Check for **requirement ID collisions** across domains.
+2. Check for **contradictions** (Domain A says MUST, Domain B says MUST NOT for same behavior).
+3. Check for **missing coverage** (proposal in-scope items without corresponding requirements).
+4. Check for **scope creep** (requirements that cover out-of-scope items from proposal).
+
+Document any issues found in the summary output warnings.
+
+### Step 8b: Generate Eval Definitions
+
+For each scenario across all domain specs, emit an eval definition. This enables `sdd-verify` to apply pass@k scoring instead of binary pass/fail.
+
+**Eval type and criticality are already declared** in each scenario heading as inline tags (set in Step 7). Read them directly — do NOT re-classify from the THEN clause. If a scenario heading is missing its tags, treat it as `code-based` · `standard` and flag a warning.
+
+For reference only (use when authoring scenarios, not when generating the table):
+
+**Eval type** — pick based on the THEN clause:
+
+| Type | Use when THEN clause... |
+|------|------------------------|
+| `code-based` | References observable, machine-checkable state (HTTP status, return value, DB row, error code) |
+| `model-based` | Describes semantic behavior requiring judgment (UX quality, error message tone, accessibility) |
+| `human-based` | Requires manual verification (visual design, business process approval) |
+
+**Criticality** — pick based on RFC 2119 keyword and domain:
+
+| Level | When | Verify threshold |
+|-------|------|-----------------|
+| `critical` | MUST/SHALL requirements, security scenarios, data integrity | pass^3 = 1.00 → **FAIL** if absent |
+| `standard` | SHOULD requirements, performance goals, UX scenarios | pass@3 ≥ 0.90 → **PASS_WITH_WARNINGS** if absent |
+
+Add an `## Eval Definitions` section at the end of each domain spec file (after Acceptance Criteria Summary):
+
+```markdown
+## Eval Definitions
+
+| Scenario | Eval Type | Criticality | Threshold |
+|----------|-----------|-------------|-----------|
+| REQ-{DOMAIN}-001 › {Scenario Title} | code-based | critical | pass^3 = 1.00 |
+| REQ-{DOMAIN}-001 › {Edge Case Title} | code-based | critical | pass^3 = 1.00 |
+| REQ-{DOMAIN}-002 › {Scenario Title} | code-based | standard | pass@3 ≥ 0.90 |
+| REQ-{DOMAIN}-003 › {Scenario Title} | model-based | standard | pass@3 ≥ 0.90 |
+```
+
+Every scenario in the Acceptance Criteria Summary MUST have a corresponding row here. No orphaned scenarios.
+
+### Step 9: Present Summary
+
+Present a markdown summary to the user, then STOP. Do not proceed automatically.
+
+**On success, output:**
+
+```markdown
+## SDD Spec: {change_name}
+
+**Domains**: {N}  |  **Requirements**: {N}  |  **Scenarios**: {N}
+
+### Spec Files Written
+{For each domain:}
+- `openspec/changes/{change_name}/specs/{domain}/spec.md` — {N} requirements, {N} scenarios
+
+### Coverage
+| Domain | MUST | SHOULD | MAY | Scenarios |
+|--------|------|--------|-----|-----------|
+| {domain} | {N} | {N} | {N} | {N} |
+
+### Eval Definitions
+- **code-based**: {N}  |  **model-based**: {N}  |  **human-based**: {N}
+- **critical**: {N}  |  **standard**: {N}
+
+{If consistency issues: ### ⚠ Consistency Issues\n- {issue}\n}
+{If warnings: ### ⚠ Warnings\n- {warning}\n}
+
+**Next step**: Review the spec files in your editor. When satisfied, proceed to `/sdd-design` (if not already running in parallel) and then `/sdd-tasks` once both spec and design are complete.
+```
+
+## Rules and Constraints
+
+1. **Use RFC 2119 keywords precisely.** MUST means MUST. Do not use MUST for recommended behaviors.
+2. **Every requirement needs at least one testable scenario.** No exceptions. Requirements without scenarios are incomplete.
+3. **Scenarios must be concrete.** Use specific values, HTTP codes, type shapes, error messages. No vague "works correctly" assertions.
+4. **Delta specs describe CHANGES, not the entire system.** Only specify what is ADDED, MODIFIED, or REMOVED.
+5. **If existing specs exist in `openspec/specs/`**, reference them for context. MODIFIED requirements MUST include a "Previously:" reference.
+6. **REMOVED requirements MUST include a reason** and migration notes if applicable.
+7. **Never modify source code.** Specs are written to `openspec/changes/{change_name}/specs/`.
+8. **Never write specs for out-of-scope items.** If the proposal says "OAuth2 token refresh is out of scope", do not write refresh specs.
+9. **Specs can run in PARALLEL with sdd-design.** Both depend only on the proposal. Neither depends on the other.
+10. **Requirement IDs must be unique** across all domains within the change. Use the format `REQ-{DOMAIN}-{NNN}`.
+11. **Align scenarios with project error handling patterns** (per CLAUDE.md). THEN clauses should reference the project's success/error return conventions where applicable.
+12. **Include negative scenarios.** For every happy path, include at least one error/edge case scenario showing what happens when things go wrong.
+13. **Domain names MUST be kebab-case.** All domain identifiers and spec directory names MUST use lowercase-with-hyphens (e.g., `auth-api`, `user-profile`, `payment-flow`). Explicitly banned: `snake_case` (e.g., `auth_api`), `camelCase` (e.g., `authApi`), `PascalCase` (e.g., `AuthApi`). This ensures consistent directory naming across `openspec/changes/{change}/specs/{domain}/` and `openspec/specs/{domain}.spec.md`.
+
+## Error Handling
+
+- If `openspec/config.yaml` does not exist: return `status: error` recommending `sdd-init`.
+- If `proposal.md` does not exist at the given path: return `status: error` with message.
+- If proposal has `status: rejected`: return `status: error` with message "Proposal was rejected. Create a new proposal."
+- If a domain spec file already exists: overwrite it (specs are regenerated, not appended).
+- All errors include the phase name (`spec`) and a human-readable message.
+
+## PARCER Contract
+
+```yaml
+phase: spec
+preconditions:
+  - proposal.md exists and was approved
+postconditions:
+  - ≥1 spec file in openspec/changes/{changeName}/specs/
+  - each spec contains ≥1 GIVEN/WHEN/THEN scenario
+  - specs/ directory contains ≥1 spec file with ≥1 scenario
+```
+
+
+--- CHANGE ---
+
+Name: integration-e2e-testing
+Description: Add integration and E2E tests: full HTTP stack tests (server startup → POST /quotes → response), Spanner adapter repository tests, domain model unit tests, and CLI/startup lifecycle tests. Fill the gaps identified in current test coverage.
+
+--- PROJECT ---
+
+Project: ProyectoAgentero
+Language: go
+Build Tool: go
+Manifests: go.mod
+
+--- PIPELINE CONTEXT ---
+
+Change: integration-e2e-testing — Add integration and E2E tests: full HTTP stack tests (server startup → POST /quotes → response), Spanner adapter repository tests, domain model unit tests, and CLI/startup lifecycle tests. Fill the gaps identified in current test coverage.
+Stack: go (go)
+Exploration: The riskforge codebase has thorough unit coverage for individual components but has no integration or E2E tests that exercise the full assembled stack. **Existing test inventory (17 test files across 9 packages):**
+Proposal: **Date**: 2026-03-22; **Status**: Draft
+
+--- PROPOSAL ---
+
+# Proposal: integration-e2e-testing
+
+**Date**: 2026-03-22
+**Status**: Draft
+
+## Intent
+
+Add integration and E2E tests to close three hard gaps in riskforge test coverage: the full assembled middleware chain (currently exercised only via adversarial/antirez tests that skip `SecurityHeaders` and `LimitConcurrency` assertions), the Spanner adapter repositories (zero test files), and the `cli.Run` startup lifecycle (zero test file). The work follows a hybrid strategy — in-process HTTP stack tests run in every `go test ./...` invocation; Spanner adapter tests are guarded by `//go:build integration` and run only when the emulator is available.
+
+## Scope
+
+### In Scope
+
+- New `internal/integration/` package: full HTTP middleware chain tests using `httptest.NewServer` with real `net.Listener`, mock carriers, no Spanner
+- New `internal/adapter/spanner/quote_repo_test.go` (`//go:build integration`): `Save`, `FindByRequestID` (cache hit/miss), `DeleteExpired`
+- New `internal/adapter/spanner/carrier_repo_test.go` (`//go:build integration`): `ListActive` including `NullJSON` config decoding and positional column ordering
+- New `internal/adapter/spanner/appetite_repo_test.go` (`//go:build integration`): `FindMatchingRules` (state+LOB required; classCode+premium optional), `ListAll`
+- New `internal/adapter/spanner/testutil_test.go` (`//go:build integration`): shared emulator client helper
+- New `internal/cli/run_test.go`: startup lifecycle — `API_KEYS` missing returns error immediately; clean shutdown via context cancellation; poll `/healthz` for readiness
+- `.github/workflows/go.yml` — second CI job (`integration-tests`) that starts the Spanner emulator via `docker-compose` and runs `go test -tags integration -race -count=1 ./internal/adapter/spanner/...`
+- `Makefile` — new `test-integration` target
+
+### Out of Scope
+
+- `internal/domain/` unit tests (pure value types and sentinel errors; deferred — low marginal value)
+- Real GCP Spanner tests (emulator only)
+- HTTP carrier tests against live external endpoints
+- Coverage threshold enforcement (deferred to a separate change)
+- Emulator version pinning in `docker-compose.yml` (deferred — low urgency)
+- Refactoring `cli.Run` to accept a config struct (not required; `t.Setenv` is sufficient)
+- Duplicating antirez adversarial patterns in new integration tests
+
+## Approach
+
+Option C (hybrid) from the exploration: in-process HTTP stack tests cover the gap in assembled middleware chain verification without any CI infrastructure cost; emulator-gated Spanner tests cover the SQL/column-ordering/NullJSON gaps that cannot be verified with fakes; `cli.Run` lifecycle tests use `t.Setenv` and context cancellation to avoid signal machinery.
+
+**Rationale for not modifying `cli.Run`:** The current signature `Run(ctx context.Context, _ []string, stdout, _ io.Writer) error` is directly testable. `t.Setenv("API_KEYS", "...")` sets env vars for the duration of the test and restores them on cleanup. No refactoring is required.
+
+**Rationale for a separate `internal/integration/` package rather than `internal/cli/integration_test.go`:** `cli` imports every adapter including `spanneradapter`. An `_test` package under `cli` would transitively pull Spanner into every test binary even when Spanner is not under test. A standalone `internal/integration/` package has no import of `cli` and imports only `handler`, `middleware`, `orchestrator`, `adapter`, `metrics`, and `testutil` — no Spanner dependency.
+
+**Delineation from antirez tests:** `internal/antirez/antirez_test.go` uses `httptest.NewServer` with `RequireAPIKey` and `mux` but focuses on adversarial boundary attacks (malformed JSON, concurrency storms, corpus-driven fuzzing). The new `internal/integration/` tests focus on correctness of the assembled stack for the happy path and specific middleware behaviors (`SecurityHeaders` values, `LimitConcurrency` 503, unauthenticated 401, `/healthz` bypass). There is no behavioral overlap — antirez tests should not be modified.
+
+### New Files
+
+| File path | Purpose | Build tag |
+|---|---|---|
+| `internal/integration/http_stack_test.go` | Full middleware chain E2E tests using `httptest.NewServer`; mock carriers; no Spanner | (none — runs in standard `go test ./...`) |
+| `internal/adapter/spanner/quote_repo_test.go` | `QuoteRepo.Save`, `FindByRequestID` (hit/miss/expiry), `DeleteExpired` against emulator | `//go:build integration` |
+| `internal/adapter/spanner/carrier_repo_test.go` | `CarrierRepo.ListActive`, JSON config round-trip, inactive row filtering | `//go:build integration` |
+| `internal/adapter/spanner/appetite_repo_test.go` | `AppetiteRepo.FindMatchingRules` (required-only, classCode, premium range, no match), `ListAll` | `//go:build integration` |
+| `internal/adapter/spanner/testutil_test.go` | `newEmulatorClient(t)` helper — reads env vars, calls `spanneradapter.NewClient`, calls `t.Cleanup(client.Close)` | `//go:build integration` |
+| `internal/cli/run_test.go` | `TestRun_MissingAPIKeys`, `TestRun_CleanShutdown` — uses `t.Setenv`, `context.WithCancel`, polls `/healthz` | (none) |
+
+### Modified Files
+
+| File path | Change description |
+|---|---|
+| `.github/workflows/go.yml` | Add `integration-tests` job: `docker-compose up -d spanner-emulator spanner-init`, wait-for-ready step, `go test -tags integration -race -count=1 ./internal/adapter/spanner/...` |
+| `Makefile` | Add `test-integration` target: `docker compose up -d && go test -tags integration -race -count=1 ./internal/adapter/spanner/...` |
+
+## Test Strategy
+
+### `internal/integration/http_stack_test.go`
+
+Wires the full production middleware chain identically to `cli.Run` (lines 178–184):
+
+```
+AuditLog → SecurityHeaders → RequireAPIKey → LimitConcurrency → mux → Handler → Orchestrator
+```
+
+Uses `httptest.NewServer` (real `net.Listener`) with mock carriers (alpha, beta, gamma identical to `buildCarriers()` defaults). Each test calls `t.Cleanup(srv.Close)` and `t.Cleanup(stopAuth)`.
+
+Tests:
+
+- `TestHTTPStack_PostQuotes_HappyPath` — authenticated POST `/quotes` with valid body; asserts 200, non-empty `quotes` array, `Content-Type: application/json`
+- `TestHTTPStack_PostQuotes_Unauthorized` — missing `Authorization` header; asserts 401
+- `TestHTTPStack_PostQuotes_WrongKey` — `Authorization: Bearer wrong`; asserts 401
+- `TestHTTPStack_SecurityHeaders` — authenticated request; asserts `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` present in response
+- `TestHTTPStack_ConcurrencyLimit` — fill semaphore with N goroutines, then one extra; asserts 503 on the overflow request
+- `TestHTTPStack_HealthzBypassesAuth` — unauthenticated GET `/healthz`; asserts 200
+- `TestHTTPStack_ReadyzBypassesAuth` — unauthenticated GET `/readyz`; asserts 200
+- `TestHTTPStack_MetricsBypassesAuth` — unauthenticated GET `/metrics`; asserts 200
+
+### `internal/adapter/spanner/testutil_test.go`
+
+```go
+//go:build integration
+
+func newEmulatorClient(t *testing.T) *spanner.Client {
+    t.Helper()
+    host := os.Getenv("SPANNER_EMULATOR_HOST")
+    if host == "" {
+        t.Skip("SPANNER_EMULATOR_HOST not set — skipping integration test")
+    }
+    client, err := NewClient(context.Background(),
+        envOrDefault("SPANNER_PROJECT", "riskforge-dev"),
+        envOrDefault("SPANNER_INSTANCE", "test-instance"),
+        envOrDefault("SPANNER_DATABASE", "test-db"),
+    )
+    require.NoError(t, err)
+    t.Cleanup(client.Close)
+    return client
+}
+```
+
+The `t.Skip` guard means the integration tests degrade gracefully if the emulator is absent (e.g., a developer running `go test -tags integration ./...` locally without Docker).
+
+### `internal/adapter/spanner/quote_repo_test.go`
+
+Tests use `newEmulatorClient(t)`, then `NewQuoteRepo(client)`. Each test inserts then reads via the repo; no raw Spanner mutations bypass the repo interface.
+
+- `TestQuoteRepo_Save_FindByRequestID` — save two results for the same `requestID`; call `FindByRequestID`; assert `found == true`, len == 2, `PremiumCents` match, results ordered ascending
+- `TestQuoteRepo_FindByRequestID_Miss` — call `FindByRequestID` for an unknown ID; assert `found == false`, `results == nil`
+- `TestQuoteRepo_FindByRequestID_IgnoresExpired` — save one result with `ExpiresAt` in the past (using a direct Spanner mutation to bypass the repo's `CommitTimestamp` constraint); call `FindByRequestID`; assert `found == false`
+- `TestQuoteRepo_DeleteExpired` — save one expired row via direct mutation; call `DeleteExpired`; assert returned count >= 1; call `FindByRequestID`; assert miss
+
+### `internal/adapter/spanner/carrier_repo_test.go`
+
+Tests insert rows directly via Spanner mutations, then read via `NewCarrierRepo(client).ListActive(ctx)`.
+
+- `TestCarrierRepo_ListActive_ReturnsActive` — insert two active rows and one inactive row; assert `ListActive` returns exactly two carriers
+- `TestCarrierRepo_ListActive_DecodesConfig` — insert one active row with a JSON `Config` containing `TimeoutHint`, `FailureThreshold`, `RateLimit`; assert decoded `domain.CarrierConfig` fields match input (verifies `json.Marshal` → `NullJSON` → `json.Unmarshal` round-trip and positional column ordering: `CarrierId, Name, Code, Config`)
+- `TestCarrierRepo_ListActive_NullConfig` — insert one active row with `Config = NULL`; assert `ListActive` returns the carrier with a zero-value `domain.CarrierConfig`
+
+### `internal/adapter/spanner/appetite_repo_test.go`
+
+Tests insert rows directly, then read via `NewAppetiteRepo(client).FindMatchingRules(ctx, risk)`.
+
+- `TestAppetiteRepo_FindMatchingRules_RequiredOnly` — insert two rules: one matching `state="CA"`, `lob="auto"` and one for `state="NY"`; call with `{State: "CA", LineOfBusiness: "auto"}`; assert one result
+- `TestAppetiteRepo_FindMatchingRules_WithClassCode` — insert rule with `ClassCode = "auto-commercial"` and one with `ClassCode = NULL`; call with classCode set; assert both returned (NULL acts as wildcard per the `ClassCode IS NULL OR ClassCode = @classCode` SQL)
+- `TestAppetiteRepo_FindMatchingRules_PremiumRange` — insert rule with `MinPremium = 1000`, `MaxPremium = 5000`; call with `EstimatedPremium = 3000`; assert match; call with `EstimatedPremium = 6000`; assert no match
+- `TestAppetiteRepo_FindMatchingRules_NoMatch` — call with state/lob with no seeded data; assert empty slice, nil error
+- `TestAppetiteRepo_ListAll` — insert three rules across different states; call `ListAll`; assert all three returned
+
+### `internal/cli/run_test.go`
+
+No build tag — runs in standard `go test ./...`. Does not require Spanner (Spanner env vars absent → `cli.Run` falls back to mock carriers).
+
+- `TestRun_MissingAPIKeys` — `t.Setenv("API_KEYS", "")`, call `cli.Run(ctx, nil, io.Discard, io.Discard)`; assert returned error wraps the string `"API_KEYS environment variable required"`; assert returns immediately (no blocking)
+- `TestRun_CleanShutdown` — `t.Setenv("API_KEYS", "test-key-abc")`, `t.Setenv("PORT", freePort())`; call `cli.Run` in a goroutine; poll `GET http://127.0.0.1:{port}/healthz` until 200 or 2 s timeout; cancel context; assert goroutine returns nil within 5 s
+
+`freePort()` is a helper that opens and immediately closes a `net.Listen("tcp", ":0")` to obtain an ephemeral port, avoiding port collisions between parallel tests.
+
+### CI integration job
+
+```yaml
+integration-tests:
+  name: Integration Tests (Spanner Emulator)
+  runs-on: ubuntu-latest
+  steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-go@v5
+      with:
+        go-version: "1.25"
+    - name: Start Spanner emulator
+      run: docker compose up -d spanner-emulator spanner-init
+    - name: Wait for emulator ready
+      run: |
+        for i in $(seq 1 30); do
+          curl -sf http://localhost:9020/v1/projects/riskforge-dev/instances && break
+          sleep 2
+        done
+    - name: Run integration tests
+      env:
+        SPANNER_EMULATOR_HOST: localhost:9010
+        SPANNER_PROJECT: riskforge-dev
+        SPANNER_INSTANCE: test-instance
+        SPANNER_DATABASE: test-db
+      run: go test -tags integration -race -count=1 -v ./internal/adapter/spanner/...
+```
+
+The integration job is independent of `build-and-test` — a Spanner emulator failure does not block the fast-path job.
+
+## Risks
+
+| Risk | Mitigation |
+|---|---|
+| Spanner emulator absent in developer's local env | `newEmulatorClient(t)` calls `t.Skip` when `SPANNER_EMULATOR_HOST` is unset; integration tests degrade silently rather than fail |
+| `TestRun_CleanShutdown` flakiness from port collision | Use `net.Listen(":0")` to obtain an OS-assigned ephemeral port; pass it to `Run` via `t.Setenv("PORT", ...)` |
+| `TestRun_CleanShutdown` blocked by `signal.NotifyContext` inside `cli.Run` | `cli.Run` wraps the passed-in `ctx` with `signal.NotifyContext` at line 45; cancelling the parent context propagates correctly — `<-ctx.Done()` fires at line 203 regardless of the signal wrapper |
+| Column order regression in `CarrierRepo.ListActive` | `TestCarrierRepo_ListActive_DecodesConfig` verifies the full `row.Columns(&id, &name, &code, &configJSON)` scan against a known insertion; a reorder in the SQL breaks this test deterministically |
+| `antirez` test overlap causing confusion | New integration tests are in a separate package (`internal/integration`) with a distinct focus (correctness + middleware headers); antirez focus remains adversarial/chaos; no shared helpers are introduced between the two |
+
+## Rollback Plan
+
+All new test files are additive — they introduce no changes to production code. Rollback is:
+
+1. Delete `internal/integration/http_stack_test.go`
+2. Delete `internal/cli/run_test.go`
+3. Delete `internal/adapter/spanner/*_test.go` and `internal/adapter/spanner/testutil_test.go`
+4. Revert `.github/workflows/go.yml` to remove the `integration-tests` job
+5. Revert `Makefile` to remove `test-integration` target
+
+No production behavior is affected by any of these deletions.
+
+## Success Criteria
+
+- `go test -race -count=1 ./...` passes with zero new failures and includes `internal/integration/` and `internal/cli/` packages in the run
+- `go test -tags integration -race -count=1 ./internal/adapter/spanner/...` passes against a running Spanner emulator (`docker compose up -d spanner-emulator spanner-init`)
+- The `integration-tests` CI job is green on a clean `main` push
+- The following specific behaviors are verified by named tests:
+  - `TestHTTPStack_PostQuotes_Unauthorized` confirms 401 without `Authorization` header
+  - `TestHTTPStack_SecurityHeaders` confirms `X-Content-Type-Options: nosniff` is present
+  - `TestHTTPStack_ConcurrencyLimit` confirms 503 when semaphore is full
+  - `TestQuoteRepo_FindByRequestID_IgnoresExpired` confirms expired rows are not returned
+  - `TestCarrierRepo_ListActive_DecodesConfig` confirms `NullJSON` → `domain.CarrierConfig` round-trip
+  - `TestAppetiteRepo_FindMatchingRules_WithClassCode` confirms `NULL ClassCode` acts as wildcard
+  - `TestRun_MissingAPIKeys` confirms `cli.Run` returns a non-nil error immediately when `API_KEYS` is empty
+  - `TestRun_CleanShutdown` confirms `cli.Run` returns nil after context cancellation
+

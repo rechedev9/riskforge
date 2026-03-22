@@ -1,0 +1,33 @@
+{
+  "version": 7,
+  "phases": {
+    "design": {
+      "bytes": 60912,
+      "tokens": 15228,
+      "cached": false,
+      "duration_ms": 0
+    },
+    "explore": {
+      "bytes": 26363,
+      "tokens": 6590,
+      "cached": false,
+      "duration_ms": 19
+    },
+    "propose": {
+      "bytes": 40650,
+      "tokens": 10162,
+      "cached": false,
+      "duration_ms": 25
+    },
+    "spec": {
+      "bytes": 30791,
+      "tokens": 7697,
+      "cached": false,
+      "duration_ms": 0
+    }
+  },
+  "total_bytes": 158716,
+  "total_tokens": 39677,
+  "cache_hits": 0,
+  "cache_misses": 4
+}

@@ -1,0 +1,20 @@
+{
+  "name": "integration-e2e-testing",
+  "description": "Add integration and E2E tests: full HTTP stack tests (server startup → POST /quotes → response), Spanner adapter repository tests, domain model unit tests, and CLI/startup lifecycle tests. Fill the gaps identified in current test coverage.",
+  "current_phase": "archive",
+  "phases": {
+    "apply": "completed",
+    "archive": "pending",
+    "clean": "completed",
+    "design": "completed",
+    "explore": "completed",
+    "propose": "completed",
+    "review": "completed",
+    "spec": "completed",
+    "tasks": "completed",
+    "verify": "completed"
+  },
+  "created_at": "2026-03-22T17:22:26.244600525Z",
+  "updated_at": "2026-03-22T17:59:40.926892107Z",
+  "base_ref": "bcaa0207d42f7482a962a8764b6cbea9c3b75773"
+}

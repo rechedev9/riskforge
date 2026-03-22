@@ -1,0 +1,814 @@
+
+--- SKILL ---
+
+---
+name: sdd-propose
+description: >
+  Create a change proposal from exploration analysis. Produces proposal.md with intent, scope, approach, risks, and rollback plan.
+  Trigger: When user runs /sdd-new or after sdd-explore completes successfully.
+license: MIT
+metadata:
+  version: "1.0"
+---
+
+# SDD Propose
+
+You are executing the **propose** phase inline. A proposal is the human-readable contract that must be approved before any specifications, design, or implementation work begins. It captures the WHAT, WHY, and high-level HOW of a change.
+
+## Activation
+
+User runs `/sdd-new <change-name> "<intent>"`. The change name must be kebab-case. Reads `openspec/changes/{changeName}/exploration.md` if it exists.
+
+## Execution Steps
+
+### Step 1: Load Project Context
+
+1. Read `openspec/config.yaml` for:
+   - Project stack and architecture
+   - Coding conventions and constraints
+   - Required proposal sections (from `phases.proposal.required_sections`)
+2. If `config.yaml` does not exist, return `status: error` recommending `sdd-init` first.
+
+### Step 2: Load Exploration Results
+
+1. If `exploration_path` is provided, read the `exploration.md` file.
+2. If `exploration_data` is provided, use the inline data.
+3. If neither is provided:
+   - Check if `openspec/changes/{change_name}/exploration.md` exists (may have been created by a prior explore phase).
+   - If not found, proceed without exploration data but add a warning that the proposal may lack depth.
+4. Extract from exploration:
+   - Current state summary
+   - Relevant files and their purposes
+   - Risk assessment
+   - Recommended approach
+   - Open questions
+
+### Step 2b: Requirement Clarification Gate
+
+This step ensures that critical ambiguities are resolved before writing the proposal. It prevents building proposals on assumptions that could invalidate the entire approach.
+
+#### 2b-1. Check for BLOCKING Questions
+
+1. If exploration data is available, read the `blocking_questions` field (or the "Clarification Required (BLOCKING)" section of exploration.md).
+2. If no exploration data is available, perform lightweight ambiguity detection on the `intent`:
+
+| Check | Trigger | Example |
+|---|---|---|
+| Vague scope | Intent uses words like "improve", "refactor", "fix" without specifics | "Improve the dashboard" — improve what? performance? UX? data accuracy? |
+| Multiple interpretations | Intent could lead to fundamentally different approaches | "Add notifications" — email? push? in-app? all three? |
+| Missing constraints | Intent doesn't specify boundaries that affect architecture | "Support multiple users" — how many? 10 or 10 million? |
+| Undefined integration | Intent references external systems without details | "Connect to payment provider" — which one? what API version? |
+
+3. Generate any new BLOCKING questions found that weren't in the exploration.
+
+#### 2b-2. Evaluate Clarification Status
+
+Three possible states:
+
+**State A: No BLOCKING questions** → Proceed to Step 3.
+
+**State B: BLOCKING questions exist AND `clarification_answers` provided** → Validate that every BLOCKING question has a corresponding answer. If any answer is missing or unclear, add it to the questions list and return `needs_clarification`. Otherwise, incorporate answers into the proposal context and proceed to Step 3.
+
+**State C: BLOCKING questions exist AND NO `clarification_answers`** → Return early with:
+
+```yaml
+phase: propose
+status: needs_clarification
+data:
+  change_name: <string>
+  blocking_questions:
+    - question: <specific question>
+      why_it_matters: <consequence>
+      options:
+        - label: "A"
+          description: <option>
+          consequence: <result>
+        - label: "B"
+          description: <option>
+          consequence: <result>
+      recommendation: <default if forced to choose>
+  deferred_questions:
+    - <string>
+  message: "Cannot write proposal — {N} blocking question(s) require your input. Please answer and re-invoke."
+```
+
+Present these questions to the user. When they provide answers, re-run `/sdd-new` with the answers incorporated.
+
+#### 2b-3. Incorporate Answers
+
+When `clarification_answers` are provided:
+1. Use the answers to resolve approach decisions, scope boundaries, and constraints.
+2. Reference the answers explicitly in the proposal (e.g., in Key Decisions: "Per user clarification: using WebSocket over SSE for real-time updates").
+3. If an answer creates new questions (rare), classify them. New BLOCKING questions trigger another `needs_clarification` return (max 2 clarification rounds to prevent fatigue).
+
+### Step 3: Validate Change Name
+
+1. Ensure `change_name` is kebab-case (lowercase, hyphens, no spaces).
+2. Check if `openspec/changes/{change_name}/` already exists:
+   - If `proposal.md` exists, return `status: error` with message "Proposal already exists. Use sdd-continue to proceed or choose a different change name."
+   - If directory exists but no `proposal.md`, it is safe to proceed (exploration may have been written).
+
+### Step 4: Assess Change Size
+
+Determine the change size based on exploration data and intent:
+
+| Size   | Criteria                                          | Recommendation           |
+|--------|---------------------------------------------------|--------------------------|
+| Small  | 1-3 files modified, no new dependencies, no DB    | Single proposal is fine  |
+| Medium | 4-10 files, may add dependencies, minor DB change | Single proposal is fine  |
+| Large  | 10+ files, new dependencies, DB migration, new API| Recommend splitting      |
+
+If the change is **large** and `size_hint` was not explicitly set to `large`:
+- Include a warning in the proposal recommending it be split into smaller changes
+- Suggest concrete split points (e.g., "Phase 1: Add database schema, Phase 2: Add API endpoints, Phase 3: Add UI")
+
+### Step 5: Create Change Directory
+
+Create `openspec/changes/{change_name}/` if it does not already exist.
+
+### Step 6: Write proposal.md
+
+Write `openspec/changes/{change_name}/proposal.md` with the following required sections:
+
+```markdown
+# Proposal: {Change Name (title case)}
+
+**Change ID**: {change_name}
+**Date**: {ISO 8601 timestamp}
+**Status**: draft
+
+---
+
+## Intent
+
+{What is being changed and why, in 1-3 sentences. Focus on the problem being solved and the value delivered. Do not describe implementation details here.}
+
+## Scope
+
+### In Scope
+
+- {Specific deliverable 1}
+- {Specific deliverable 2}
+- {Specific deliverable 3}
+
+### Out of Scope
+
+- {Explicitly excluded item 1 -- and brief reason why}
+- {Explicitly excluded item 2 -- and brief reason why}
+
+## Approach
+
+{High-level strategy for implementing this change. 1-2 paragraphs describing the overall approach without getting into file-level details. Reference the recommended approach from exploration if available.}
+
+### Key Decisions
+
+| Decision                | Choice            | Rationale                          |
+|-------------------------|-------------------|------------------------------------|
+| {Decision point 1}     | {Chosen approach} | {Why this was chosen}              |
+| {Decision point 2}     | {Chosen approach} | {Why this was chosen}              |
+
+## Affected Areas
+
+| Module / Area           | File Path                        | Change Type     | Risk Level |
+|-------------------------|----------------------------------|-----------------|------------|
+| {Module name}           | {absolute file path}             | create/modify/delete | low/medium/high |
+| {Module name}           | {absolute file path}             | create/modify/delete | low/medium/high |
+
+**Total files affected**: {count}
+**New files**: {count}
+**Modified files**: {count}
+**Deleted files**: {count}
+
+## Risks
+
+| Risk                    | Probability | Impact  | Mitigation                         |
+|-------------------------|-------------|---------|------------------------------------|
+| {Risk description}      | low/medium/high | low/medium/high | {How to prevent or handle this} |
+| {Risk description}      | low/medium/high | low/medium/high | {How to prevent or handle this} |
+
+**Overall Risk Level**: {low | medium | high}
+
+## Rollback Plan
+
+{MANDATORY section. Describe exactly how to undo this change if something goes wrong.}
+
+### Steps to Rollback
+
+1. {Specific step 1 with git command or file operation}
+2. {Specific step 2}
+3. {Specific step 3}
+
+### Rollback Verification
+
+- {How to verify the rollback was successful}
+- {What state the system should be in after rollback}
+
+## Dependencies
+
+### Internal Dependencies
+
+- {Module or file that must exist/be modified first}
+
+### External Dependencies
+
+| Package              | Version  | Purpose                    | Already Installed |
+|----------------------|----------|----------------------------|-------------------|
+| {package-name}       | {semver} | {why it is needed}         | yes/no            |
+
+### Infrastructure Dependencies
+
+- {Database migration needed: yes/no}
+- {New environment variables: list or none}
+- {New services: list or none}
+
+## Success Criteria
+
+All of the following must be true for this change to be considered complete:
+
+- [ ] {Measurable criterion 1, e.g., "All new endpoints return typed responses with proper error handling"}
+- [ ] {Measurable criterion 2, e.g., "Unit tests cover all new functions with >80% branch coverage"}
+- [ ] {Measurable criterion 3, e.g., "Project's build/typecheck command passes with zero errors"}
+- [ ] {Measurable criterion 4, e.g., "Project's lint command passes with zero warnings"}
+- [ ] {Measurable criterion 5, e.g., "No type-system escape hatches or compiler suppressions in new code"}
+- [ ] {Measurable criterion 6, e.g., "Rollback plan tested and verified"}
+
+## Open Questions
+
+{List any unresolved questions from exploration or new questions raised during proposal writing. These MUST be answered before moving to the spec phase.}
+
+- {Question 1}
+- {Question 2}
+
+---
+
+**Next Step**: Review and approve this proposal, then run `sdd-spec` and `sdd-design` (can run in parallel).
+```
+
+### Step 7: Validate Proposal Completeness
+
+Before returning, validate that the proposal has:
+
+1. **Intent** -- not empty, not just restating the change name
+2. **Scope** -- both in-scope AND out-of-scope items listed
+3. **Approach** -- at least one key decision with rationale
+4. **Affected Areas** -- at least one file path (absolute, not relative)
+5. **Risks** -- at least one risk identified (every change has risks)
+6. **Rollback Plan** -- contains specific steps (not "revert the commit")
+7. **Dependencies** -- section present even if empty ("None" is acceptable)
+8. **Success Criteria** -- at least 3 measurable criteria including type safety and test passing
+
+If any section is missing or inadequate, add it with a `[TODO]` marker and include a warning in the summary output.
+
+### Step 8: Present Summary
+
+Present a markdown summary to the user, then STOP. Do not proceed automatically.
+
+If blocking clarification questions exist (status: PARTIAL), output the questions and stop — do not write `proposal.md` until answers are provided.
+
+**On success, output:**
+
+```markdown
+## SDD Propose: {change_name}
+
+**Size**: {small | medium | large}  |  **Risk**: {low | medium | high}  |  **Files affected**: {N}
+
+### Proposal Written
+`openspec/changes/{change_name}/proposal.md`
+
+### Scope
+- **In scope**: {N} items
+- **Out of scope**: {N} items explicitly excluded
+
+### Key Decisions
+{decision table summary — 1-2 rows}
+
+{If open questions: ### Open Questions ({N})\n{questions list}\n}
+{If warnings: ### ⚠ Warnings\n{warnings list}\n}
+{If large change: ### ⚠ Size Warning\nThis change is large. Consider splitting into: {split suggestions}\n}
+
+**Next step**: Review `openspec/changes/{change_name}/proposal.md`. When satisfied, run `/sdd-spec` and `/sdd-design` (these can run in parallel, each in its own session).
+```
+
+**On PARTIAL (blocking questions):**
+
+```markdown
+## SDD Propose: Clarification Needed
+
+Cannot write proposal — {N} blocking question(s) require your input.
+
+### Q1: {specific question}
+- **Why it matters**: {consequence}
+- **Options**: A: {option} → {consequence} | B: {option} → {consequence}
+- **Recommendation**: {default}
+
+Re-run `/sdd-new {change_name} "<intent>"` after answering.
+```
+
+## Rules and Constraints
+
+1. **The proposal is a HUMAN-READABLE document** for review and approval. Write clearly, not in code-speak.
+2. **Rollback Plan is NEVER optional.** Every change must be reversible. If it truly cannot be rolled back (e.g., destructive database migration), state that explicitly with mitigation.
+3. **Scope must explicitly state what is OUT of scope.** This prevents scope creep and miscommunication.
+4. **Success criteria must be verifiable.** Not "code works well" but "all tests pass, no type errors, API returns 200 for valid input."
+5. **If the change is too large** (10+ files, multiple domains), recommend splitting with concrete split suggestions.
+6. **All file paths must be absolute.** Never use relative paths in the affected areas table.
+7. **Never modify source code.** The proposal phase only writes to `openspec/changes/{change_name}/`.
+8. **Never skip risk assessment.** Even "simple" changes have risks (regression, performance, compatibility).
+9. **Reference exploration data** when available. The proposal should build on exploration findings, not ignore them.
+10. **Open questions must be answerable.** Not "will this work?" but "should we use WebSocket or SSE for real-time updates?"
+11. **Respect project conventions** from `config.yaml` and `CLAUDE.md`. Success criteria must include type safety and error handling checks consistent with the project's rules.
+12. **Do not prescribe implementation details.** The proposal says WHAT and WHY, not exactly HOW at the code level. That is the design phase's job.
+
+## Error Handling
+
+- If `openspec/config.yaml` does not exist: return `status: error` with message "Run sdd-init first."
+- If `change_name` is not kebab-case: return `status: error` with corrected suggestion.
+- If `proposal.md` already exists: return `status: error` with guidance to use sdd-continue.
+- If intent is empty or not provided: return `status: error` requesting intent description.
+- All errors include the phase name (`propose`) and a human-readable message.
+
+## PARCER Contract
+
+```yaml
+phase: propose
+preconditions:
+  - exploration.md exists at openspec/changes/{changeName}/
+postconditions:
+  - proposal.md written with all required_sections from config.yaml phases.proposal
+  - proposal.md contains change size and risk level assessment
+  - proposal.md written with all required sections, or clarification questions presented
+```
+
+
+--- CHANGE ---
+
+Name: integration-e2e-testing
+Description: Add integration and E2E tests: full HTTP stack tests (server startup → POST /quotes → response), Spanner adapter repository tests, domain model unit tests, and CLI/startup lifecycle tests. Fill the gaps identified in current test coverage.
+
+--- PROJECT ---
+
+Project: ProyectoAgentero
+Language: go
+Build Tool: go
+Manifests: go.mod
+
+--- FILE TREE ---
+
+.dockerignore
+.github/workflows/go.yml
+.github/workflows/terraform.yml
+.gitignore
+.golangci.yml
+CLAUDE.md
+Dockerfile
+Makefile
+README.md
+assets/banner.png
+cmd/api/main.go
+docker-compose.yml
+docs/anthropic-go-sdk.md
+docs/cloud-pubsub.md
+docs/cloud-run.md
+docs/cloud-spanner.md
+docs/handoff.md
+docs/opentelemetry-go.md
+docs/pickup.md
+docs/terraform-gcp.md
+go.mod
+go.sum
+internal/adapter/adapter.go
+internal/adapter/adapter_test.go
+internal/adapter/delta_carrier.go
+internal/adapter/http_carrier.go
+internal/adapter/http_carrier_test.go
+internal/adapter/mock_carrier.go
+internal/adapter/mock_carrier_test.go
+internal/adapter/spanner/appetite_repo.go
+internal/adapter/spanner/carrier_repo.go
+internal/adapter/spanner/client.go
+internal/adapter/spanner/quote_repo.go
+internal/antirez/antirez_test.go
+internal/circuitbreaker/breaker.go
+internal/circuitbreaker/breaker_test.go
+internal/cleanup/cleanup.go
+internal/cleanup/ticker_test.go
+internal/cli/run.go
+internal/domain/appetite.go
+internal/domain/carrier.go
+internal/domain/errors.go
+internal/domain/quote.go
+internal/handler/fuzz_test.go
+internal/handler/http.go
+internal/handler/http_test.go
+internal/metrics/prometheus.go
+internal/metrics/prometheus_test.go
+internal/middleware/audit.go
+internal/middleware/auth.go
+internal/middleware/concurrency.go
+internal/middleware/middleware_test.go
+internal/middleware/security.go
+internal/orchestrator/chaos_test.go
+internal/orchestrator/hedging.go
+internal/orchestrator/hedging_test.go
+internal/orchestrator/leak_test.go
+internal/orchestrator/orchestrator.go
+internal/orchestrator/orchestrator_concurrency_test.go
+internal/orchestrator/orchestrator_random_test.go
+internal/orchestrator/orchestrator_test.go
+internal/ports/appetite_port.go
+internal/ports/metrics_port.go
+internal/ports/quote_port.go
+internal/ports/repository_port.go
+internal/ratelimiter/limiter.go
+internal/ratelimiter/limiter_test.go
+internal/testutil/recorder.go
+openspec/changes/archive/2026-03-22-103620-terraform-gcp-module/archive-manifest.md
+openspec/changes/archive/2026-03-22-103620-terraform-gcp-module/clean-report.md
+openspec/changes/archive/2026-03-22-103620-terraform-gcp-module/design.md
+openspec/changes/archive/2026-03-22-103620-terraform-gcp-module/exploration.md
+openspec/changes/archive/2026-03-22-103620-terraform-gcp-module/proposal.md
+openspec/changes/archive/2026-03-22-103620-terraform-gcp-module/review-report.md
+openspec/changes/archive/2026-03-22-103620-terraform-gcp-module/specs/bootstrap/spec.md
+openspec/changes/archive/2026-03-22-103620-terraform-gcp-module/specs/ci-cd/spec.md
+openspec/changes/archive/2026-03-22-103620-terraform-gcp-module/specs/cloud-run/spec.md
+openspec/changes/archive/2026-03-22-103620-terraform-gcp-module/specs/environments/spec.md
+openspec/changes/archive/2026-03-22-103620-terraform-gcp-module/specs/iam/spec.md
+openspec/changes/archive/2026-03-22-103620-terraform-gcp-module/specs/monitoring/spec.md
+openspec/changes/archive/2026-03-22-103620-terraform-gcp-module/specs/networking/spec.md
+openspec/changes/archive/2026-03-22-103620-terraform-gcp-module/specs/pubsub/spec.md
+openspec/changes/archive/2026-03-22-103620-terraform-gcp-module/specs/spanner/spec.md
+openspec/changes/archive/2026-03-22-103620-terraform-gcp-module/specs/spec.md
+openspec/changes/archive/2026-03-22-103620-terraform-gcp-module/specs/storage/spec.md
+openspec/changes/archive/2026-03-22-103620-terraform-gcp-module/state.json
+openspec/changes/archive/2026-03-22-103620-terraform-gcp-module/tasks.md
+openspec/changes/archive/2026-03-22-103620-terraform-gcp-module/verify-report.md
+openspec/changes/go-skill-fixes/design.md
+openspec/changes/go-skill-fixes/exploration.md
+openspec/changes/go-skill-fixes/proposal.md
+openspec/changes/go-skill-fixes/specs/spec.md
+openspec/changes/go-skill-fixes/state.json
+openspec/changes/go-skill-fixes/tasks.md
+openspec/changes/merge-carrier-gateway/design.md
+openspec/changes/merge-carrier-gateway/exploration.md
+openspec/changes/merge-carrier-gateway/proposal.md
+openspec/changes/merge-carrier-gateway/specs/spec.md
+openspec/changes/merge-carrier-gateway/state.json
+openspec/changes/merge-carrier-gateway/tasks.md
+openspec/changes/owasp-security-hardening/design.md
+openspec/changes/owasp-security-hardening/exploration.md
+openspec/changes/owasp-security-hardening/proposal.md
+openspec/changes/owasp-security-hardening/specs/audit-logging/spec.md
+openspec/changes/owasp-security-hardening/specs/ci-cd-security/spec.md
+openspec/changes/owasp-security-hardening/specs/firewall-rules/spec.md
+openspec/changes/owasp-security-hardening/specs/iam-scoping/spec.md
+openspec/changes/owasp-security-hardening/specs/monitoring-worker/spec.md
+openspec/changes/owasp-security-hardening/specs/provider-pinning/spec.md
+openspec/changes/owasp-security-hardening/specs/spec.md
+openspec/changes/owasp-security-hardening/specs/storage-security/spec.md
+openspec/changes/owasp-security-hardening/state.json
+openspec/changes/owasp-security-hardening/tasks.md
+openspec/changes/spanner-emulator/state.json
+openspec/config.yaml
+scripts/committer
+scripts/docs-list
+scripts/seed-emulator
+terraform/bootstrap/.terraform.lock.hcl
+terraform/bootstrap/main.tf
+terraform/bootstrap/outputs.tf
+terraform/bootstrap/variables.tf
+terraform/bootstrap/versions.tf
+terraform/environments/dev/.terraform.lock.hcl
+terraform/environments/dev/backend.tf
+terraform/environments/dev/main.tf
+terraform/environments/dev/outputs.tf
+terraform/environments/dev/terraform.tfvars
+terraform/environments/dev/variables.tf
+terraform/environments/prod/.terraform.lock.hcl
+terraform/environments/prod/backend.tf
+terraform/environments/prod/main.tf
+terraform/environments/prod/outputs.tf
+terraform/environments/prod/terraform.tfvars
+terraform/environments/prod/variables.tf
+terraform/modules/cloud-run/main.tf
+terraform/modules/cloud-run/outputs.tf
+terraform/modules/cloud-run/variables.tf
+terraform/modules/cloud-run/versions.tf
+terraform/modules/iam/main.tf
+terraform/modules/iam/outputs.tf
+terraform/modules/iam/variables.tf
+terraform/modules/iam/versions.tf
+terraform/modules/kms/main.tf
+terraform/modules/kms/outputs.tf
+terraform/modules/kms/variables.tf
+terraform/modules/kms/versions.tf
+terraform/modules/monitoring/channels.tf
+terraform/modules/monitoring/main.tf
+terraform/modules/monitoring/outputs.tf
+terraform/modules/monitoring/variables.tf
+terraform/modules/monitoring/versions.tf
+terraform/modules/networking/main.tf
+terraform/modules/networking/outputs.tf
+terraform/modules/networking/variables.tf
+terraform/modules/networking/versions.tf
+terraform/modules/pubsub/main.tf
+terraform/modules/pubsub/outputs.tf
+terraform/modules/pubsub/variables.tf
+terraform/modules/pubsub/versions.tf
+terraform/modules/spanner/main.tf
+terraform/modules/spanner/outputs.tf
+terraform/modules/spanner/variables.tf
+terraform/modules/spanner/versions.tf
+terraform/modules/storage/main.tf
+terraform/modules/storage/outputs.tf
+terraform/modules/storage/variables.tf
+terraform/modules/storage/versions.tf
+
+--- EXPLORATION ---
+
+# Exploration: integration-e2e-testing
+
+## Current State
+
+The riskforge codebase has thorough unit coverage for individual components but
+has no integration or E2E tests that exercise the full assembled stack.
+
+**Existing test inventory (17 test files across 9 packages):**
+
+| Package | Test file(s) | What is tested |
+|---|---|---|
+| `internal/handler` | `http_test.go`, `fuzz_test.go` | Handler in isolation with mock orchestrator via `httptest.NewRecorder` |
+| `internal/middleware` | `middleware_test.go` | Each middleware in isolation with `httptest.NewRecorder` |
+| `internal/orchestrator` | `orchestrator_test.go`, `orchestrator_concurrency_test.go`, `orchestrator_random_test.go`, `chaos_test.go`, `hedging_test.go`, `leak_test.go` | Orchestrator with mock adapters; no real HTTP server, no Spanner |
+| `internal/adapter` | `http_carrier_test.go`, `mock_carrier_test.go`, `adapter_test.go` | HTTP carrier against `httptest.Server`, mock carrier |
+| `internal/circuitbreaker` | `breaker_test.go` | CB state machine |
+| `internal/ratelimiter` | `limiter_test.go` | Token bucket |
+| `internal/cleanup` | `ticker_test.go` | Cleanup ticker with stub repo |
+| `internal/metrics` | `prometheus_test.go` | Prometheus recorder |
+| `internal/antirez` | `antirez_test.go` | Adversarial black-box tests wiring handler+orchestrator+middleware via `httptest.NewServer` but with mock carriers and no Spanner |
+
+**What is NOT tested:**
+
+- `internal/cli/run.go` — zero test file; the full server wiring, `API_KEYS` validation, signal handling, graceful shutdown path
+- `internal/adapter/spanner/` — zero test file for any of `QuoteRepo`, `CarrierRepo`, `AppetiteRepo`
+- `internal/domain/` — zero test file (pure value types and sentinel errors; low risk but some behavior worth pinning)
+- Full HTTP stack assembled end-to-end: `AuditLog → SecurityHeaders → RequireAPIKey → LimitConcurrency → mux → Handler → Orchestrator → MockCarrier` with a real `net.Listener`
+- Cache hit / cache miss paths in orchestrator (require a wired `QuoteRepository`)
+- `cli.Run` failure paths (missing `API_KEYS`, Spanner connection error)
+
+**CI pipeline state:**
+`.github/workflows/go.yml` runs `go test -race -count=1 ./...` with no emulator service. The Spanner adapter packages are not skipped — they simply have no tests. The workflow has no `services:` block and does not start the Spanner emulator.
+
+**Infrastructure for emulator:**
+`docker-compose.yml` brings up `gcr.io/cloud-spanner-emulator/emulator:latest` on ports `9010` (gRPC) and `9020` (HTTP/REST). A `spanner-init` container creates project `riskforge-dev`, instance `test-instance`, database `test-db` with the full DDL (Carriers, AppetiteRules, Quotes tables). `scripts/seed-emulator` seeds demo data via `gcloud`. The Spanner client respects `SPANNER_EMULATOR_HOST` env var (handled transparently by the Google Cloud Go SDK — `NewClient` in `internal/adapter/spanner/client.go` line 12 does not need modification).
+
+---
+
+## Relevant Files
+
+| File | Role | Notes |
+|---|---|---|
+| `internal/cli/run.go` | Server wiring | Only production file; no test file; wires all deps, reads env vars, starts HTTP server |
+| `internal/handler/http.go` | HTTP handler | `handlePostQuotes`, `handleReadyz`, `/metrics`, `/healthz`; fully unit-tested in isolation |
+| `internal/handler/http_test.go` | Existing unit tests | Uses `httptest.NewRecorder` + mock orchestrator; middleware NOT in the chain |
+| `internal/domain/quote.go` | Value types | `QuoteRequest`, `QuoteResult`, `Money`, `CoverageLine` |
+| `internal/domain/carrier.go` | Value types | `Carrier`, `CarrierConfig`, `RateLimitConfig` |
+| `internal/domain/appetite.go` | Value types | `AppetiteRule`, `RiskClassification` |
+| `internal/domain/errors.go` | Sentinel errors | 6 sentinel errors; no tests |
+| `internal/adapter/spanner/client.go` | Spanner client constructor | Reads `SPANNER_EMULATOR_HOST` from environment automatically |
+| `internal/adapter/spanner/quote_repo.go` | Spanner QuoteRepo | `Save`, `FindByRequestID`, `DeleteExpired` |
+| `internal/adapter/spanner/carrier_repo.go` | Spanner CarrierRepo | `ListActive` — reads Carriers table, decodes JSON Config |
+| `internal/adapter/spanner/appetite_repo.go` | Spanner AppetiteRepo | `FindMatchingRules`, `ListAll` — reads AppetiteRules table |
+| `internal/ports/repository_port.go` | QuoteRepository interface | Documents nil-is-allowed contract |
+| `internal/ports/quote_port.go` | CarrierPort, OrchestratorPort interfaces | |
+| `internal/ports/appetite_port.go` | AppetiteRepository, CarrierRepository interfaces | |
+| `internal/ports/metrics_port.go` | MetricsRecorder interface | |
+| `internal/middleware/auth.go` | API key auth middleware | `RequireAPIKey` returns `(http.Handler, func())` — stop func must be called |
+| `internal/middleware/security.go` | Security headers | `SecurityHeaders` — pure wrapper |
+| `internal/middleware/concurrency.go` | Concurrency limiter | `LimitConcurrency` — semaphore; returns 503 at cap |
+| `internal/middleware/audit.go` | Audit log | `AuditLog` — `statusRecorder` wrapper |
+| `internal/orchestrator/orchestrator.go` | Orchestrator | Cache hit/miss logic at lines 98–111; singleflight at 118–132; repo.Save at 245–253 |
+| `internal/testutil/recorder.go` | `NoopRecorder` | Shared test helper; atomic call counters |
+| `docker-compose.yml` | Local infra | Spanner emulator + init container; project `riskforge-dev`, instance `test-instance`, db `test-db` |
+| `.github/workflows/go.yml` | CI | No Spanner emulator service; does not guard Spanner tests |
+| `scripts/seed-emulator` | Seed script | Seeds 3 carriers + 10 appetite rules via `gcloud` |
+| `Makefile` | Build targets | `test` = `go test -race -count=1 ./...`; no emulator target |
+
+---
+
+## Dependency Map
+
+```
+cli.Run
+  ├── spanneradapter.NewClient          (env: SPANNER_EMULATOR_HOST, SPANNER_PROJECT, ...)
+  ├── spanneradapter.NewCarrierRepo     → ListActive (Spanner Carriers table)
+  ├── spanneradapter.NewQuoteRepo       → Save, FindByRequestID, DeleteExpired
+  ├── adapter.NewRegistry + MockCarrier
+  ├── circuitbreaker.New
+  ├── ratelimiter.New
+  ├── orchestrator.NewEMATracker
+  ├── orchestrator.New(OrchestratorConfig)   ← repo is QuoteRepository (nil when no Spanner)
+  ├── handler.New(HandlerConfig)
+  ├── mux.RegisterRoutes
+  ├── middleware.LimitConcurrency
+  ├── middleware.RequireAPIKey            ← returns stopFn — must defer
+  ├── middleware.SecurityHeaders
+  ├── middleware.AuditLog
+  └── http.Server{ Addr, Handler, timeouts }
+
+Test wiring gaps:
+  antirez_test: wires handler+orch+middleware but via httptest.NewServer, no Spanner
+  handler_test:  wires handler only, no middleware, no Spanner
+  orchestrator_test: wires orch only, no HTTP layer, no Spanner (Repo: nil)
+```
+
+**Key structural points:**
+
+- `cli.Run` is the only place all dependencies are wired together.
+- `RequireAPIKey` returns a `(handler, stopFunc)` pair — tests that don't call `stopFunc` leak a goroutine.
+- `orchestrator.GetQuotes` has two branching paths depending on whether `repo != nil`: cache lookup → singleflight → fanOut → repo.Save. These paths are not covered without a real or fake `QuoteRepository`.
+- `spanneradapter.NewClient` connects to the emulator automatically when `SPANNER_EMULATOR_HOST` is set; no code changes required.
+- The Quotes table DDL uses `(RequestID, CarrierID)` as PK and `QuotesByExpiry` secondary index; `DeleteExpired` uses `PartitionedUpdate` which requires a `readwrite` transaction mode.
+
+---
+
+## Data Flow
+
+### POST /quotes — full stack (what integration tests must verify)
+
+```
+HTTP client
+  → AuditLog middleware (wraps ResponseWriter in statusRecorder)
+  → SecurityHeaders middleware (sets headers before handler runs)
+  → RequireAPIKey middleware (reads Authorization: Bearer <key>; sets clientIDKey in ctx)
+  → LimitConcurrency middleware (semaphore; 503 if full)
+  → mux.ServeHTTP (route match: POST /quotes)
+  → handler.handlePostQuotes
+      ├── JSON decode + validate (request_id, coverage_lines, timeout_ms)
+      ├── buildDomainRequest → domain.QuoteRequest
+      ├── middleware.ClientIDFromContext (reads clientIDKey)
+      └── orchestrator.GetQuotes(ctx, req)
+              ├── repo.FindByRequestID (cache check) [if repo != nil]
+              ├── singleflight.Do (dedup by scoped key)
+              └── fanOut
+                      ├── filterEligibleCarriers (capability + CB state)
+                      ├── callCarrier × N (parallel: rate limiter → CB → adapter)
+                      ├── hedgeMonitor goroutine
+                      ├── collect + dedup + sort by premium
+                      └── repo.Save [if repo != nil && results > 0]
+  → JSON encode quoteResponse
+  → AuditLog records status + duration
+```
+
+### Spanner repo data flow (what Spanner adapter tests must verify)
+
+```
+QuoteRepo.Save
+  → spanner.InsertOrUpdateStruct("Quotes", quoteRow{...})
+  → client.Apply(ctx, mutations)
+
+QuoteRepo.FindByRequestID
+  → client.Single().Query(SQL with ExpiresAt > NOW())
+  → row.ToStruct(&quoteRow) → domain.QuoteResult
+
+QuoteRepo.DeleteExpired
+  → client.PartitionedUpdate("DELETE FROM Quotes WHERE ExpiresAt <= CURRENT_TIMESTAMP()")
+
+CarrierRepo.ListActive
+  → client.Single().Query(SQL WHERE IsActive = true)
+  → row.Columns(&id, &name, &code, &configJSON)
+  → json.Unmarshal(configJSON) → domain.CarrierConfig
+
+AppetiteRepo.FindMatchingRules
+  → dynamic SQL (state + lob required; classCode + premium optional)
+  → row.Columns(8 cols including NullString, NullFloat64, NullJSON)
+  → domain.AppetiteRule
+```
+
+**Critical field mismatches to verify:**
+- `CarrierRepo`: column order is `CarrierId, Name, Code, Config` (line 25 of carrier_repo.go) — must match exactly.
+- `AppetiteRepo`: queries 8 columns in specific order; `ClassCode` is `NullString`, `MinPremium`/`MaxPremium` are `NullFloat64`, `EligibilityCriteria` is `NullJSON`.
+- `QuoteRepo.Save`: uses `spanner.CommitTimestamp` for `CreatedAt` — must use `allow_commit_timestamp = true` column option (present in DDL).
+
+---
+
+## Risk Assessment
+
+| Risk | Severity | Likelihood | Notes |
+|---|---|---|---|
+| Spanner emulator unavailable in CI | High | High | CI has no emulator service; Spanner adapter tests will fail unless guarded by build tag or env-var skip |
+| `PartitionedUpdate` not supported by emulator | Medium | Low | `PartitionedUpdate` is supported by the emulator since v1.4; verify version in docker-compose (`latest`) |
+| Column order mismatch in `CarrierRepo.ListActive` | Medium | Medium | `row.Columns` is positional — query selects `CarrierId, Name, Code, Config`; must exactly match scan order |
+| `CommitTimestamp` in `quoteRow.CreatedAt` | Low | Low | `spanner.CommitTimestamp` is a sentinel value; `allow_commit_timestamp = true` is in DDL; should work |
+| `cli.Run` goroutine leak from `stopAuth` | Low | Low | `defer stopAuth()` is already present in production code; tests using `cli.Run` must call it or use `context.WithCancel` |
+| Flaky timing in E2E startup test | Medium | Medium | Test must wait for server readiness (poll `/healthz`) rather than fixed sleep |
+| `internal/domain` has no behavioral logic to unit test | Low | Low | All fields are plain Go structs; only sentinel errors and typed constants; pinning tests have low marginal value |
+| antirez tests already cover some integration paths | Low | Low | `antirez_test.go` assembles handler+orch+middleware via `httptest.NewServer` but without Spanner — overlap risk with new integration tests |
+
+---
+
+## Approach Comparison
+
+### Option A — Pure in-process integration tests (no emulator required)
+
+Wire the full HTTP stack (`AuditLog → SecurityHeaders → RequireAPIKey → LimitConcurrency → mux → Handler → Orchestrator`) with mock carriers but no Spanner. Use `httptest.NewServer` (real `net.Listener`) or `httptest.NewRecorder` with the full middleware chain.
+
+**Pros:**
+- Runs in CI today with zero infrastructure changes.
+- Covers the assembled middleware chain (gap not covered by existing tests).
+- Fast (no I/O).
+
+**Cons:**
+- Does not cover `cli.Run` wiring itself.
+- Does not cover Spanner adapter code.
+- `QuoteRepository` cache paths remain untested.
+
+### Option B — Spanner emulator tests (integration, opt-in via build tag)
+
+Add `//go:build integration` tag to Spanner adapter tests. Tests connect to emulator via `SPANNER_EMULATOR_HOST`. CI gets a new job with `docker-compose up -d spanner-emulator spanner-init` before running `go test -tags integration ./...`.
+
+**Pros:**
+- Full Spanner CRUD coverage: `Save`, `FindByRequestID`, `DeleteExpired`, `ListActive`, `FindMatchingRules`.
+- Tests real SQL, column ordering, `NullJSON` decoding, `PartitionedUpdate`.
+
+**Cons:**
+- Requires CI infrastructure changes (Docker service, wait-for-ready step).
+- Slow to start emulator (~5–10 seconds).
+- Emulator behavioral edge cases differ slightly from production Spanner (e.g., strong reads, some PDML constraints).
+
+### Option C — Hybrid: in-process integration + emulator-gated Spanner tests
+
+Implement both A and B:
+- New `internal/integration/` package: full HTTP stack test with mock carriers, no Spanner; runs in standard `go test ./...`.
+- New `internal/adapter/spanner/` `*_test.go` files with `//go:build integration` tag; run only when emulator is up.
+- New `internal/cli/run_test.go`: lightweight startup test using `context.WithCancel` to drive shutdown; mock Spanner env vars absent (falls back to mock carriers); validates `API_KEYS` rejection path.
+- Extend `.github/workflows/go.yml` with a second job using `services:` or `docker-compose` to run emulator-gated tests.
+
+**Pros:**
+- Fills every identified gap.
+- Standard tests (`go test ./...`) remain fast and require no infra.
+- Emulator tests run in a dedicated CI job — failures don't block the fast path.
+
+**Cons:**
+- Two CI jobs to maintain.
+- Build tag discipline required (`//go:build integration` must be consistent).
+
+---
+
+## Recommendation
+
+**Option C — Hybrid approach.**
+
+Rationale:
+1. The biggest unaddressed gap is the assembled middleware chain. A new `internal/integration/` package (or `internal/handler/integration_test.go`) with `httptest.NewServer` and the real middleware stack covers this with zero infra cost.
+2. The Spanner adapter is completely untested. The emulator is already present in `docker-compose.yml`; the only missing piece is CI integration and test files.
+3. `cli.Run` startup behavior (missing `API_KEYS`, clean shutdown) is exercisable without Spanner — tests drive `Run` directly by injecting a cancelable context.
+
+**Proposed file structure:**
+
+```
+internal/integration/
+  http_stack_test.go       # full middleware chain, mock carriers, httptest.NewServer
+internal/adapter/spanner/
+  quote_repo_test.go       # //go:build integration — Save/FindByRequestID/DeleteExpired
+  carrier_repo_test.go     # //go:build integration — ListActive, JSON config decoding
+  appetite_repo_test.go    # //go:build integration — FindMatchingRules (with/without classCode, premium)
+internal/cli/
+  run_test.go              # startup lifecycle: API_KEYS missing, clean shutdown via ctx cancel
+internal/domain/
+  errors_test.go           # optional: pin sentinel error identities with errors.Is
+.github/workflows/go.yml   # add integration job with Spanner emulator service
+Makefile                   # add `test-integration` target
+```
+
+**Key implementation notes:**
+
+- `internal/integration/` is a new package, not `_test.go` under `cli` or `handler`, to avoid import cycles.
+- Emulator test helper: a `testutil/spanner.go` (build-tag-gated) that calls `spanneradapter.NewClient` with env vars `SPANNER_EMULATOR_HOST`, `SPANNER_PROJECT=riskforge-dev`, `SPANNER_INSTANCE=test-instance`, `SPANNER_DATABASE=test-db`, then uses the DDL from `docker-compose.yml` or connects to a pre-initialized emulator.
+- Integration HTTP tests must call `stopAuth()` returned by `middleware.RequireAPIKey` to avoid goroutine leaks in `-race` mode.
+- `cli.Run` test: set `API_KEYS=""` → assert `Run` returns non-nil error immediately (no server starts). For clean shutdown: set env vars, call `Run` in a goroutine, poll `/healthz`, then cancel context, assert `Run` returns nil.
+- Domain unit tests: `errors.Is` checks for each sentinel; `CoverageLine` constant values; `Money.Amount` zero value. Low value — defer or skip.
+
+---
+
+## Clarification Required (BLOCKING)
+
+None. All information needed to write the proposal is available:
+- Test gap inventory is complete.
+- Emulator infrastructure is already present.
+- Build tag strategy (`//go:build integration`) is standard Go practice.
+- Port interfaces are well-defined; test doubles are straightforward.
+
+---
+
+## Open Questions (DEFERRED)
+
+1. **Emulator version pinning.** `docker-compose.yml` uses `gcr.io/cloud-spanner-emulator/emulator:latest`. Should CI pin a specific version tag to prevent surprise breakage? Low urgency — can be addressed in the proposal or as a follow-up.
+
+2. **Domain unit tests scope.** The domain package has no behavior beyond typed constants and sentinel errors. Is pinning these (e.g., `errors.Is(domain.ErrCircuitOpen, domain.ErrCircuitOpen)`) worth the file, or should the domain package remain test-free? Recommend deferring — the proposal can omit domain tests unless the reviewer requests them.
+
+3. **`cli.Run` test isolation strategy.** `cli.Run` reads multiple env vars (`PORT`, `API_KEYS`, `SPANNER_PROJECT`, etc.) and calls `signal.NotifyContext`. Testing this cleanly requires either injecting env vars via `t.Setenv` (safe, reverted after test) or refactoring `Run` to accept a config struct. The current signature `Run(ctx, args, stdout, stderr)` is testable as-is using `t.Setenv` — no refactoring required. Confirm this approach is acceptable before the proposal stage.
+
+4. **`antirez` overlap.** `internal/antirez/antirez_test.go` already assembles handler + orchestrator + all middleware via `httptest.NewServer` (adversarial focus). New integration tests should complement (different assertions: status codes, response body structure, security headers) rather than duplicate. Delineation should be made explicit in the proposal.
+
+5. **Coverage target.** CI currently reports total coverage but does not enforce a minimum threshold. Should the integration work introduce a coverage gate (e.g., `COVERAGE >= 80%`)? Deferred to proposal.
+
