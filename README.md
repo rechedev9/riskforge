@@ -1,44 +1,104 @@
 <p align="center">
-  <img src="assets/banner.png" alt="RISKFORGE — GCP Infrastructure for Insurtech" width="720">
+  <img src="assets/banner.png" alt="RISKFORGE — Carrier Quote Gateway" width="720">
 </p>
 
-<h1 align="center">riskforge — GCP Infrastructure for Insurtech</h1>
+<h1 align="center">riskforge</h1>
 
 <p align="center">
-  <strong>Production-grade Terraform modules for Cloud Run + Spanner + Pub/Sub.<br>Built to demonstrate GCP, Go, and IaC competency for insurance technology platforms.</strong>
+  <strong>Multi-carrier insurance quote aggregation engine with appetite-based pre-filtering.<br>Go backend + GCP infrastructure (Terraform) + OWASP-hardened security.</strong>
 </p>
 
 <p align="center">
+  <img src="https://img.shields.io/badge/Go-1.25-00ADD8?style=for-the-badge&logo=go" alt="Go 1.25">
   <img src="https://img.shields.io/badge/Terraform-1.5+-7B42BC?style=for-the-badge&logo=terraform" alt="Terraform 1.5+">
   <img src="https://img.shields.io/badge/GCP-Cloud_Run_|_Spanner_|_Pub/Sub-4285F4?style=for-the-badge&logo=googlecloud" alt="GCP">
-  <img src="https://img.shields.io/badge/Modules-7-7C3AED?style=for-the-badge" alt="Modules: 7">
-  <img src="https://img.shields.io/badge/Go-1.24-00ADD8?style=for-the-badge&logo=go" alt="Go 1.24">
-  <img src="https://img.shields.io/badge/License-MIT-blue?style=for-the-badge" alt="MIT License">
+  <img src="https://img.shields.io/badge/Security-OWASP_Hardened-EF3B2D?style=for-the-badge" alt="OWASP">
 </p>
 
 <p align="center">
-  <a href="#architecture">Architecture</a> ·
-  <a href="#modules">Modules</a> ·
+  <a href="#how-it-works">How It Works</a> ·
   <a href="#quick-start">Quick Start</a> ·
-  <a href="#environments">Environments</a> ·
-  <a href="#cicd">CI/CD</a> ·
-  <a href="docs/terraform-gcp.md">Reference</a>
+  <a href="#architecture">Architecture</a> ·
+  <a href="#api">API</a> ·
+  <a href="#infrastructure">Infrastructure</a> ·
+  <a href="#security">Security</a>
 </p>
 
 ---
 
-Infrastructure-as-Code for an insurance carrier appetite matching engine. Seven Terraform modules provision a complete GCP stack — from IAM and networking through compute, storage, messaging, and observability. Two environment configurations (dev/prod) demonstrate production-grade separation with parameterized scaling, deletion protection, and alert gating.
+A carrier quote gateway that fans out quote requests to multiple insurance carriers in parallel, hedges slow responders adaptively, and returns sorted results through a single HTTP endpoint. Carriers are pre-filtered by appetite rules (state, line of business, premium range) stored in Spanner before any quote request is sent.
 
 ```
-What this provisions:
+POST /quotes
+  → appetite pre-filter (Spanner)
+    → fan-out to eligible carriers (parallel)
+      → hedge slow carriers (adaptive EMA p95)
+        → deduplicate + sort by premium
+          → JSON response
+```
 
-Cloud Run (API + Worker)  ──→  Spanner (Carriers, AppetiteRules)
-        │                              │
-        └── Pub/Sub (events) ──────────┘
-        │
-        └── Monitoring (latency, errors, CPU, uptime)
-        │
-VPC + Connector ── IAM (3 SAs, least-privilege) ── Storage (docs + Artifact Registry)
+---
+
+## How It Works
+
+1. **Request arrives** at `POST /quotes` with coverage lines, state, and optional premium estimate
+2. **Appetite filter** checks Spanner for which carriers accept that risk profile
+3. **Fan-out** sends quote requests to all eligible carriers in parallel
+4. **Hedging** monitors carrier latency — if a carrier exceeds its p95 threshold, a hedge request fires to a faster carrier
+5. **Circuit breakers** trip after consecutive failures, excluding unreliable carriers
+6. **Rate limiters** enforce per-carrier token buckets to prevent overload
+7. **Results** are deduplicated, sorted by premium ascending, and cached in Spanner
+
+---
+
+## Quick Start
+
+### Run locally (no dependencies)
+
+```bash
+API_KEYS="dev-key-for-local-testing-only-32chars" go run ./cmd/api/
+```
+
+```bash
+curl -s -H "Authorization: Bearer dev-key-for-local-testing-only-32chars" \
+  -d '{"request_id":"demo","coverage_lines":["auto","homeowners"],"timeout_ms":5000}' \
+  localhost:8080/quotes | jq
+```
+
+```json
+{
+  "request_id": "demo",
+  "quotes": [
+    {"carrier_id": "alpha", "premium_cents": 89790, "currency": "USD", "latency_ms": 100},
+    {"carrier_id": "beta",  "premium_cents": 61813, "currency": "USD", "latency_ms": 210},
+    {"carrier_id": "gamma", "premium_cents": 72677, "currency": "USD", "latency_ms": 800}
+  ],
+  "duration_ms": 809
+}
+```
+
+### Run with Spanner emulator (Docker)
+
+```bash
+docker compose up --build
+```
+
+This starts:
+- **Spanner emulator** on ports 9010/9020
+- **Schema init** (creates Carriers, AppetiteRules, Quotes tables)
+- **API server** on port 8080
+
+Seed demo data:
+```bash
+./scripts/seed-emulator  # 3 carriers, 10 appetite rules
+```
+
+### Build
+
+```bash
+make build    # binary at ./bin/api
+make test     # tests with race detector
+make check    # fmt + lint + vet + test
 ```
 
 ---
@@ -46,243 +106,185 @@ VPC + Connector ── IAM (3 SAs, least-privilege) ── Storage (docs + Artif
 ## Architecture
 
 ```
-terraform/
-├── bootstrap/                    # One-time: state bucket, WIF, SA
-├── modules/
-│   ├── iam/                      # 3 service accounts, for_each IAM bindings
-│   ├── networking/               # VPC, /28 subnet, VPC Access connector
-│   ├── spanner/                  # Instance, database, DDL, database-level IAM
-│   ├── cloud-run/                # Generic module (instantiated 2x: API + worker)
-│   ├── pubsub/                   # Topic, DLQ, push subscription, OIDC auth
-│   ├── storage/                  # Document bucket, Artifact Registry
-│   └── monitoring/               # 3 alert policies, uptime check, email channel
-├── environments/
-│   ├── dev/                      # Scale-to-zero, 100 PU, alerts disabled
-│   └── prod/                     # Min 2 instances, 300 PU, deletion protection
-└── .github/workflows/
-    └── terraform.yml             # WIF auth, plan-on-PR, sequential apply
+cmd/api/main.go            → 14 lines, delegates to internal/cli
+internal/
+├── cli/                   → Server wiring, Spanner connection, signal handling
+├── domain/                → Carrier, Quote, AppetiteRule, Money, errors (zero deps)
+├── ports/                 → Interfaces: CarrierPort, OrchestratorPort, repositories
+├── adapter/               → Mock carriers, HTTP carrier, generic adapter registry
+│   └── spanner/           → QuoteRepo, CarrierRepo, AppetiteRepo (Spanner client)
+├── orchestrator/          → Fan-out, singleflight dedup, adaptive hedging (EMA p95)
+├── circuitbreaker/        → 3-state machine (Closed→Open→HalfOpen), atomic ops
+├── ratelimiter/           → Token bucket via x/time/rate
+├── handler/               → HTTP handler (POST /quotes, /healthz, /readyz, /metrics)
+├── middleware/             → API key auth, security headers, concurrency limiter, audit
+├── metrics/               → Prometheus recorder (gauges, histograms, counters)
+├── cleanup/               → Background expired quote cleanup ticker
+└── testutil/              → Test helpers (NoopRecorder)
 ```
 
-### Inter-Module Dependency Graph
+### Request flow
 
 ```
-                    ┌─── module.iam ───┐
-                    │   (3 SAs, IAM)    │
-                    └─────┬─────┬──────┘
-                          │     │
-              ┌───────────┤     ├───────────┐
-              │           │     │           │
-     module.spanner  module.storage  module.cloud_run_api
-     (instance, DB)  (bucket, AR)   (public, allUsers)
-              │                            │
-              │                     module.cloud_run_worker
-              │                     (internal, SA-only)
-              │                            │
-              │                     module.pubsub
-              │                     (push + OIDC + DLQ)
-              │                            │
-              │                     module.monitoring
-              │                     (alerts, uptime)
-              │
-     module.networking
-     (VPC, connector)
+HTTP Request → AuditLog → SecurityHeaders → RequireAPIKey → LimitConcurrency
+  → Handler.handlePostQuotes
+    → validate request
+    → Orchestrator.GetQuotes
+      ├── cache lookup (Spanner, optional)
+      ├── singleflight dedup (same request_id)
+      └── fanOut
+          ├── filterEligibleCarriers (appetite + capabilities + circuit breaker)
+          ├── launch primary goroutines (errgroup)
+          │   └── RateLimiter → CircuitBreaker → AdapterFunc
+          ├── hedgeMonitor (5ms poll, fires when elapsed > p95 × multiplier)
+          ├── collect + deduplicate results
+          ├── sort by premium ascending
+          └── save to Spanner cache
+    → JSON response
 ```
 
 ---
 
-## Modules
+## API
 
-| Module | Resources | Variables | Outputs |
-|--------|-----------|-----------|---------|
-| **iam** | 3 SAs, 6 IAM bindings (for_each) | project_id, environment | api_sa_email, worker_sa_email, pubsub_invoker_sa_email |
-| **networking** | VPC, /28 subnet, VPC connector, API enable | project_id, region, environment | vpc_connector_id, vpc_id |
-| **spanner** | Instance, database (DDL), database IAM | project_id, region, environment, processing_units, deletion_protection, sa_emails | instance_name, database_name |
-| **cloud-run** | Cloud Run v2 service, conditional IAM | service_name, image, min/max_instances, env_vars, secret_env_vars, ingress, allow_unauthenticated, ... | service_url, service_name, service_id |
-| **pubsub** | Topic, DLQ topic, push subscription, DLQ pull, 4 IAM members | project_id, environment, push_endpoint, invoker_sa_email, worker_sa_email, api_sa_email | topic_id, topic_name, subscription_id |
-| **storage** | GCS bucket, Artifact Registry, 2 bucket IAM | project_id, region, environment, api_sa_email, worker_sa_email | bucket_name, bucket_url, registry_url |
-| **monitoring** | 3 alert policies, uptime check, email channel | project_id, service_name, service_url, notification_email, enable_alerts | notification_channel_id, alert_policy_ids |
+### POST /quotes
 
-### Key Design Decisions
+```bash
+curl -H "Authorization: Bearer $API_KEY" \
+  -d '{
+    "request_id": "q-123",
+    "coverage_lines": ["auto", "homeowners"],
+    "timeout_ms": 5000
+  }' \
+  http://localhost:8080/quotes
+```
 
-| Decision | Choice | Why |
-|----------|--------|-----|
-| Raw `google_*` resources | No community modules | Portfolio piece — demonstrates deep GCP knowledge |
-| Additive IAM (`iam_member`) | Not `iam_binding` / `iam_policy` | Won't clobber bindings managed outside Terraform |
-| Resource-scoped IAM | Not project-level | Least-privilege: Spanner/storage/pubsub IAM at resource level |
-| Generic Cloud Run module | Instantiated 2x per env | API + worker share 90% config; DRY without premature abstraction |
-| `for_each` IAM | Not 11 individual resources | Single map-driven resource block; easy to add/remove roles |
-| `enable_alerts` toggle | Monitoring gated per env | Dev: no alerts (prevents noise + scale-to-zero interference) |
-| Sequential CI/CD | dev deploys before prod | Failed dev apply blocks prod; environment protection gates |
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `request_id` | string | yes | Unique ID (≤256 chars, ASCII printable) |
+| `coverage_lines` | string[] | yes | Lines of business to price |
+| `timeout_ms` | int | no | Max wait time (100-30000ms, default 5000) |
+
+**Response** (200):
+```json
+{
+  "request_id": "q-123",
+  "quotes": [
+    {
+      "carrier_id": "beta",
+      "premium_cents": 61813,
+      "currency": "USD",
+      "is_hedged": false,
+      "latency_ms": 210
+    }
+  ],
+  "duration_ms": 219
+}
+```
+
+| Status | Meaning |
+|--------|---------|
+| 200 | Quotes returned (sorted by premium) |
+| 400 | Invalid request |
+| 401 | Missing/invalid API key |
+| 422 | No eligible carriers |
+| 429 | Auth failure rate limit |
+| 504 | Timeout before any carrier responded |
+
+### Other endpoints
+
+| Endpoint | Method | Auth | Description |
+|----------|--------|------|-------------|
+| `/healthz` | GET | No | Always returns `ok` |
+| `/readyz` | GET | No | DB health check |
+| `/metrics` | GET | No | Prometheus metrics |
 
 ---
 
-## Quick Start
+## Infrastructure
+
+8 Terraform modules provision the full GCP stack:
+
+| Module | Resources |
+|--------|-----------|
+| **iam** | 3 SAs, project IAM, audit logging |
+| **networking** | VPC, subnet, VPC connector, 5 firewall rules, Cloud Armor |
+| **spanner** | Instance, database (Carriers + AppetiteRules + Quotes), IAM |
+| **cloud-run** | Generic module (API public + Worker internal) |
+| **pubsub** | Topic, DLQ, push subscription with OIDC |
+| **storage** | GCS bucket, Artifact Registry, IAM |
+| **monitoring** | API + Worker alerts (latency, errors, CPU), DLQ backlog, uptime |
+| **kms** | CMEK opt-in scaffold (disabled by default) |
+
+### Environments
+
+| | Dev | Prod |
+|---|---|---|
+| Instances | 0-5 (scale-to-zero) | 2-20 |
+| Spanner | 100 PU | 300 PU |
+| Alerts | Disabled | Enabled |
+| Deletion protection | No | Yes |
+
+---
+
+## Security
+
+OWASP-hardened infrastructure (15 findings fixed):
+
+- **Audit logging** — DATA_READ, DATA_WRITE, ADMIN_READ for all GCP services
+- **Firewall rules** — deny-all default + explicit allowlists (health checks, internal, GCP APIs)
+- **IAM scoping** — secretmanager.secretAccessor removed from project scope; per-secret bindings
+- **Terraform SA** — 11 explicit roles, no roles/editor
+- **CI/CD** — plan output masked in PR comments, continue-on-error removed
+- **State bucket** — public_access_prevention enforced
+- **Artifact Registry** — reader IAM scoped to runtime SAs, vulnerability scanning enabled
+- **Cloud Armor** — rate limiting policy (1000 req/min per IP)
+- **Provider pinning** — all modules pinned to ~> 6.14
+- **API auth** — constant-time key comparison, per-IP failure rate limiting with TTL eviction
+- **Security headers** — HSTS, X-Frame-Options, CSP, no-store cache
+
+---
+
+## Development
 
 ### Prerequisites
 
-- [Terraform 1.5+](https://developer.hashicorp.com/terraform/install)
-- [Google Cloud SDK](https://cloud.google.com/sdk/docs/install)
-- A GCP project with billing enabled
+- Go 1.25+
+- Docker (for Spanner emulator)
+- Terraform 1.5+ (for infrastructure)
 
-### 1. Bootstrap (one-time)
+### Environment variables
 
-```bash
-cd terraform/bootstrap
-cp terraform.tfvars.example terraform.tfvars
-# Edit: project_id, github_org, github_repo
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `API_KEYS` | yes | — | Comma-separated API keys (≥32 chars each) |
+| `PORT` | no | 8080 | HTTP server port |
+| `SPANNER_PROJECT` | no | — | GCP project (enables Spanner mode) |
+| `SPANNER_INSTANCE` | no | — | Spanner instance name |
+| `SPANNER_DATABASE` | no | — | Spanner database name |
+| `SPANNER_EMULATOR_HOST` | no | — | Emulator address (e.g., localhost:9010) |
 
-terraform init
-terraform apply
-# Outputs: state_bucket_name, wif_provider_name, terraform_sa_email
-```
-
-### 2. Configure environment
-
-```bash
-cd terraform/environments/dev
-# Update backend.tf with the state_bucket_name from bootstrap
-# Update terraform.tfvars with project_id, image_tag, ops_email
-
-terraform init
-terraform plan
-terraform apply
-```
-
-### 3. Verify
+### Make targets
 
 ```bash
-# Format check (all modules)
-terraform fmt -check -recursive terraform/
-
-# Validate (per environment)
-cd terraform/environments/dev && terraform validate
-cd terraform/environments/prod && terraform validate
+make build     # Build binary
+make test      # Run tests with race detector
+make vet       # Run go vet
+make check     # fmt + vet + test
+make docker    # Build Docker image
+make up        # docker compose up --build
+make down      # docker compose down
 ```
-
----
-
-## Environments
-
-| Parameter | Dev | Prod |
-|-----------|-----|------|
-| `min_instances` | 0 (scale-to-zero) | 2 |
-| `max_instances` | 5 | 20 |
-| `spanner_processing_units` | 100 | 300 |
-| `deletion_protection` | false | true |
-| `resource_limits` | 1 vCPU, 512Mi | 2 vCPU, 1Gi |
-| `enable_alerts` | false | true |
-| API ingress | Public (`INGRESS_TRAFFIC_ALL`) | Public |
-| Worker ingress | Internal only | Internal only |
-
-All environment-specific values flow through `locals.environment` — a single source of truth per environment root module, referenced by every module call.
-
----
-
-## CI/CD
-
-GitHub Actions workflow (`.github/workflows/terraform.yml`):
-
-```
-PR opened ──→ Plan (dev) ──→ Plan (prod) ──→ Comment on PR
-                                                    ↓
-Main merged ──→ Apply (dev) ──→ [success] ──→ Apply (prod)
-                                                    ↑
-                                          Environment gate
-```
-
-- **Auth**: Workload Identity Federation (zero stored credentials)
-- **Plan**: Parallel for dev + prod on every PR
-- **Apply**: Sequential — dev must succeed before prod starts
-- **Protection**: GitHub environment rules gate prod deployment
-- **Format**: `terraform fmt -check -recursive` runs in plan job
-
----
-
-## Spanner Schema
-
-The Spanner module includes initial DDL for the insurance domain:
-
-```sql
-CREATE TABLE Carriers (
-  CarrierId     STRING(36) NOT NULL DEFAULT (GENERATE_UUID()),
-  Name          STRING(255) NOT NULL,
-  Code          STRING(50) NOT NULL,
-  IsActive      BOOL NOT NULL DEFAULT (true),
-  CreatedAt     TIMESTAMP NOT NULL OPTIONS (allow_commit_timestamp = true),
-  UpdatedAt     TIMESTAMP NOT NULL OPTIONS (allow_commit_timestamp = true),
-) PRIMARY KEY (CarrierId)
-
-CREATE TABLE AppetiteRules (
-  RuleId              STRING(36) NOT NULL DEFAULT (GENERATE_UUID()),
-  CarrierId           STRING(36) NOT NULL,
-  State               STRING(2) NOT NULL,
-  LineOfBusiness      STRING(100) NOT NULL,
-  ClassCode           STRING(50),
-  MinPremium          FLOAT64,
-  MaxPremium          FLOAT64,
-  IsActive            BOOL NOT NULL DEFAULT (true),
-  EligibilityCriteria JSON,
-  CreatedAt           TIMESTAMP NOT NULL OPTIONS (allow_commit_timestamp = true),
-) PRIMARY KEY (CarrierId, RuleId),
-  INTERLEAVE IN PARENT Carriers ON DELETE CASCADE
-```
-
-Interleaved tables co-locate appetite rules with their parent carrier for efficient queries.
-
----
-
-## Project Structure
-
-```
-.
-├── CLAUDE.md                         # Agent protocol and conventions
-├── README.md
-├── go.mod                            # Go 1.24 module
-├── docs/
-│   ├── cloud-run.md                  # Cloud Run Go reference (1530 lines)
-│   ├── cloud-spanner.md              # Spanner Go client reference
-│   ├── cloud-pubsub.md               # Pub/Sub Go client reference
-│   ├── terraform-gcp.md              # Terraform GCP reference (1991 lines)
-│   ├── anthropic-go-sdk.md           # Claude API Go SDK reference
-│   ├── opentelemetry-go.md           # OpenTelemetry Go on GCP
-│   ├── handoff.md                    # Session handoff template
-│   └── pickup.md                     # Session pickup template
-├── terraform/
-│   ├── bootstrap/                    # State bucket + WIF (4 files)
-│   ├── modules/                      # 7 reusable modules (33 files)
-│   └── environments/                 # dev + prod configs (10 files)
-├── .github/workflows/
-│   └── terraform.yml                 # Plan + apply pipeline
-├── openspec/                         # SDD artifacts (archived)
-└── scripts/
-    ├── committer                     # Git commit helper
-    └── docs-list                     # Docs compliance checker
-```
-
----
-
-## Docs
-
-| Doc | Lines | Covers |
-|-----|-------|--------|
-| [Cloud Run](docs/cloud-run.md) | 1,530 | Container contract, Go patterns, Pub/Sub push, Eventarc, IAM, scaling |
-| [Cloud Spanner](docs/cloud-spanner.md) | 1,185 | Schema design, transactions, change streams, testing, Terraform |
-| [Cloud Pub/Sub](docs/cloud-pubsub.md) | 819 | Publish/subscribe, exactly-once, DLQ, retry, flow control |
-| [Terraform GCP](docs/terraform-gcp.md) | 1,991 | Provider, state, Cloud Run/Spanner/Pub/Sub modules, IAM, CI/CD |
-| [Anthropic Go SDK](docs/anthropic-go-sdk.md) | 1,020 | Messages, tools, structured output, PDF, streaming, batch |
-| [OpenTelemetry Go](docs/opentelemetry-go.md) | 1,004 | Tracing, metrics, Spanner instrumentation, Cloud Run, slog |
-
-All docs include YAML front-matter with `summary` and `read_when` fields for on-demand loading.
 
 ---
 
 ## Built With
 
-- **[Terraform](https://www.terraform.io/)** — Infrastructure as Code
-- **[Google Cloud Platform](https://cloud.google.com/)** — Cloud Run, Spanner, Pub/Sub, IAM, Monitoring
-- **[Go](https://go.dev/)** — Application runtime (Cloud Run services)
+- **[Go](https://go.dev/)** — API server, hexagonal architecture, zero web frameworks
+- **[Cloud Spanner](https://cloud.google.com/spanner)** — Carrier data, appetite rules, quote cache
+- **[Terraform](https://www.terraform.io/)** — 8 GCP infrastructure modules
+- **[Prometheus](https://prometheus.io/)** — Metrics (latency, errors, circuit breaker state)
 - **[GitHub Actions](https://github.com/features/actions)** — CI/CD with Workload Identity Federation
-- **[SDD](https://github.com/rechedev9/shenronSDD)** — Spec-Driven Development pipeline
 
 ## License
 
