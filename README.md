@@ -1,5 +1,5 @@
 <p align="center">
-  <h1 align="center">appetite-engine-infra — GCP Infrastructure for Insurtech</h1>
+  <h1 align="center">riskforge — GCP Infrastructure for Insurtech</h1>
 </p>
 
 <p align="center">
