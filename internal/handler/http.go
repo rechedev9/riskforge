@@ -42,16 +42,23 @@ type Handler struct {
 	db       *sql.DB // nil when no DB configured; used by /readyz
 }
 
+// HandlerConfig holds all dependencies for constructing a Handler.
+type HandlerConfig struct {
+	Orch     ports.OrchestratorPort
+	Metrics  ports.MetricsRecorder
+	Gatherer prometheus.Gatherer
+	Log      *slog.Logger
+	DB       *sql.DB // optional; nil when no database configured
+}
+
 // New returns a Handler with all dependencies injected.
-// gatherer must be the same registry where carrier metrics are registered.
-// db is optional — pass nil when no database is configured.
-func New(orch ports.OrchestratorPort, m ports.MetricsRecorder, gatherer prometheus.Gatherer, log *slog.Logger, db *sql.DB) *Handler {
+func New(c HandlerConfig) *Handler {
 	return &Handler{
-		orch:     orch,
-		metrics:  m,
-		gatherer: gatherer,
-		log:      log,
-		db:       db,
+		orch:     c.Orch,
+		metrics:  c.Metrics,
+		gatherer: c.Gatherer,
+		log:      c.Log,
+		db:       c.DB,
 	}
 }
 

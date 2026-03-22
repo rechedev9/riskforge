@@ -50,37 +50,33 @@ type Orchestrator struct {
 	sfGroup  singleflight.Group // deduplicates concurrent requests with same request_id
 }
 
-// New constructs an Orchestrator with all dependencies injected.
-// carriers, registry, breakers, limiters, and trackers must be fully
-// populated before New is called — the Orchestrator does not modify them.
-//
-// repo is optional: pass nil to disable quote caching and persistence.
-// When non-nil, GetQuotes checks the cache before fanning out and saves
-// results after the fan-out completes.
-func New(
-	carriers []domain.Carrier,
-	registry *adapter.Registry,
-	breakers map[string]*circuitbreaker.Breaker,
-	limiters map[string]*ratelimiter.Limiter,
-	trackers map[string]*EMATracker,
-	metrics ports.MetricsRecorder,
-	cfg Config,
-	log *slog.Logger,
-	repo ports.QuoteRepository,
-) *Orchestrator {
-	if cfg.HedgePollInterval <= 0 {
-		cfg.HedgePollInterval = defaultHedgePollInterval
+// OrchestratorConfig holds all dependencies for constructing an Orchestrator.
+type OrchestratorConfig struct {
+	Carriers []domain.Carrier
+	Registry *adapter.Registry
+	Breakers map[string]*circuitbreaker.Breaker
+	Limiters map[string]*ratelimiter.Limiter
+	Trackers map[string]*EMATracker
+	Metrics  ports.MetricsRecorder
+	Cfg      Config
+	Log      *slog.Logger
+	Repo     ports.QuoteRepository // optional; nil disables persistence
+}
+
+func New(c OrchestratorConfig) *Orchestrator {
+	if c.Cfg.HedgePollInterval <= 0 {
+		c.Cfg.HedgePollInterval = defaultHedgePollInterval
 	}
 	return &Orchestrator{
-		carriers: carriers,
-		registry: registry,
-		breakers: breakers,
-		limiters: limiters,
-		trackers: trackers,
-		metrics:  metrics,
-		repo:     repo,
-		cfg:      cfg,
-		log:      log,
+		carriers: c.Carriers,
+		registry: c.Registry,
+		breakers: c.Breakers,
+		limiters: c.Limiters,
+		trackers: c.Trackers,
+		metrics:  c.Metrics,
+		repo:     c.Repo,
+		cfg:      c.Cfg,
+		log:      c.Log,
 	}
 }
 

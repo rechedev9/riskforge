@@ -103,17 +103,17 @@ func newFixture(t *testing.T, carriers []domain.Carrier) *orchestratorFixture {
 // build returns an Orchestrator from the fixture.
 func (f *orchestratorFixture) build(t *testing.T) *orchestrator.Orchestrator {
 	t.Helper()
-	return orchestrator.New(
-		f.carriers,
-		f.registry,
-		f.breakers,
-		f.limiters,
-		f.trackers,
-		f.metrics,
-		orchestrator.Config{HedgePollInterval: 5 * time.Millisecond},
-		discardLog,
-		nil, // no repository in unit tests
-	)
+	return orchestrator.New(orchestrator.OrchestratorConfig{
+		Carriers: f.carriers,
+		Registry: f.registry,
+		Breakers: f.breakers,
+		Limiters: f.limiters,
+		Trackers: f.trackers,
+		Metrics:  f.metrics,
+		Cfg:      orchestrator.Config{HedgePollInterval: 5 * time.Millisecond},
+		Log:      discardLog,
+		Repo:     nil, // no repository in unit tests
+	})
 }
 
 // carrierIDs extracts carrier IDs from results for diagnostic messages.
