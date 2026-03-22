@@ -52,7 +52,14 @@ type HandlerConfig struct {
 }
 
 // New returns a Handler with all dependencies injected.
+// Panics if required deps (Orch, Log) are nil.
 func New(c HandlerConfig) *Handler {
+	if c.Orch == nil {
+		panic("handler: Orch is required")
+	}
+	if c.Log == nil {
+		panic("handler: Log is required")
+	}
 	return &Handler{
 		orch:     c.Orch,
 		metrics:  c.Metrics,
