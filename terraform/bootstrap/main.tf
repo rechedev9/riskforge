@@ -28,6 +28,7 @@ resource "google_storage_bucket" "terraform_state" {
   }
 
   uniform_bucket_level_access = true
+  public_access_prevention    = "enforced"
 
   labels = {
     purpose = "terraform-state"
@@ -80,4 +81,33 @@ resource "google_service_account_iam_member" "wif_terraform" {
   service_account_id = google_service_account.terraform.name
   role               = "roles/iam.workloadIdentityUser"
   member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/attribute.repository/${var.github_org}/${var.github_repo}"
+}
+
+# -----------------------------------------------------------------------------
+# Terraform SA Project Roles (H3)
+# Enumerated minimal set. No roles/editor — each role scoped to one service domain.
+# -----------------------------------------------------------------------------
+
+locals {
+  terraform_sa_roles = toset([
+    "roles/compute.admin",
+    "roles/iam.serviceAccountAdmin",
+    "roles/run.admin",
+    "roles/spanner.admin",
+    "roles/pubsub.admin",
+    "roles/storage.admin",
+    "roles/monitoring.admin",
+    "roles/vpcaccess.admin",
+    "roles/artifactregistry.admin",
+    "roles/secretmanager.admin",
+    "roles/iam.workloadIdentityPoolAdmin",
+  ])
+}
+
+resource "google_project_iam_member" "terraform_roles" {
+  for_each = local.terraform_sa_roles
+
+  project = var.project_id
+  role    = each.value
+  member  = "serviceAccount:${google_service_account.terraform.email}"
 }
