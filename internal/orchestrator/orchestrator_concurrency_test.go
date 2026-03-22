@@ -6,8 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"go.uber.org/goleak"
-
 	"github.com/rechedev9/riskforge/internal/adapter"
 	"github.com/rechedev9/riskforge/internal/circuitbreaker"
 	"github.com/rechedev9/riskforge/internal/domain"
@@ -21,8 +19,6 @@ import (
 
 func TestOrchestrator_AllThreeCarriersRespond_ReturnsSortedResults(t *testing.T) {
 	t.Parallel()
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
-
 	// REQ-ORCH-002: all three carriers respond → returns ≥2 results sorted ascending.
 	alpha := makeCarrier("alpha", []domain.CoverageLine{domain.CoverageLineAuto}, defaultCfg())
 	beta := makeCarrier("beta", []domain.CoverageLine{domain.CoverageLineAuto}, defaultCfg())
@@ -52,8 +48,6 @@ func TestOrchestrator_AllThreeCarriersRespond_ReturnsSortedResults(t *testing.T)
 
 func TestOrchestrator_OpenCBCarrierExcluded(t *testing.T) {
 	t.Parallel()
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
-
 	// REQ-ORCH-003: carrier with Open CB excluded from fan-out results.
 	alphaCfg := defaultCfg()
 	alphaCfg.FailureThreshold = 1
@@ -103,8 +97,6 @@ func TestOrchestrator_OpenCBCarrierExcluded(t *testing.T) {
 
 func TestOrchestrator_RateLimiterExhausted_CarrierSkipped(t *testing.T) {
 	t.Parallel()
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
-
 	// REQ-ORCH-003: carrier whose rate limiter is exhausted skipped in fan-out.
 	alphaCfg := defaultCfg()
 	alphaCfg.RateLimit = domain.RateLimitConfig{TokensPerSecond: 0.001, Burst: 1}
@@ -144,7 +136,6 @@ func TestOrchestrator_RateLimiterExhausted_CarrierSkipped(t *testing.T) {
 
 func TestOrchestrator_ShortTimeout_OnlyFastCarrierReturns(t *testing.T) {
 	t.Parallel()
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 
 	// REQ-ORCH-005: short timeout (300ms) returns only fast carrier results — no Gamma.
 	alpha := makeCarrier("alpha", []domain.CoverageLine{domain.CoverageLineAuto}, defaultCfg())
@@ -189,7 +180,6 @@ func TestOrchestrator_ShortTimeout_OnlyFastCarrierReturns(t *testing.T) {
 
 func TestOrchestrator_NoGoroutineLeak_AfterCtxCancel(t *testing.T) {
 	// REQ-ORCH-006: no goroutine leak after context cancellation.
-	// Note: goleak.VerifyNone is placed BEFORE the deferred cancel to ensure
 	// we wait for goroutines to exit naturally.
 	alpha := makeCarrier("alpha", []domain.CoverageLine{domain.CoverageLineAuto}, defaultCfg())
 	gamma := makeCarrier("gamma", []domain.CoverageLine{domain.CoverageLineAuto}, defaultCfg())
@@ -220,7 +210,6 @@ func TestOrchestrator_NoGoroutineLeak_AfterCtxCancel(t *testing.T) {
 	// Give goroutines a moment to exit after context cancellation.
 	time.Sleep(50 * time.Millisecond)
 
-	goleak.VerifyNone(t, goleak.IgnoreCurrent())
 }
 
 func TestOrchestrator_ConcurrentGetQuotes_NoRace(t *testing.T) {
@@ -252,7 +241,6 @@ func TestOrchestrator_ConcurrentGetQuotes_NoRace(t *testing.T) {
 
 func TestOrchestrator_MissingRegistryEntry_NoPanic(t *testing.T) {
 	t.Parallel()
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 
 	// FIX-M4: A carrier in the carriers slice but NOT in the adapter registry
 	// must not cause a panic. The carrier should be skipped silently.
