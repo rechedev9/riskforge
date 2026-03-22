@@ -5,6 +5,7 @@ package cleanup
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/rechedev9/riskforge/internal/ports"
@@ -18,6 +19,7 @@ type Ticker struct {
 	log      *slog.Logger
 	stop     chan struct{}
 	done     chan struct{}
+	stopOnce sync.Once
 }
 
 // New creates a Ticker that will call repo.DeleteExpired every interval.
@@ -54,8 +56,11 @@ func (t *Ticker) Start(ctx context.Context) {
 }
 
 // Stop signals the ticker goroutine to exit and waits for it to finish.
+// Safe to call multiple times — the channel close is guarded by sync.Once.
 func (t *Ticker) Stop() {
-	close(t.stop)
+	t.stopOnce.Do(func() {
+		close(t.stop)
+	})
 	<-t.done
 }
 
