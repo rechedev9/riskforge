@@ -31,17 +31,18 @@ func TestAppetiteRepo_FindMatchingRules_RequiredOnly(t *testing.T) {
 	ctx := context.Background()
 
 	carrierID := shortID(t)
+	lob := "lob-" + carrierID[:8] // unique LOB per test to avoid cross-test leakage
 	insertParentCarrier(t, client, carrierID)
 
 	cols := []string{"CarrierId", "RuleId", "State", "LineOfBusiness", "ClassCode", "MinPremium", "MaxPremium", "IsActive", "CreatedAt"}
 	mutations := []*spanner.Mutation{
 		spanner.InsertOrUpdate("AppetiteRules", cols, []interface{}{
-			carrierID, "rule-ca", "CA", "auto",
+			carrierID, "rule-ca", "CA", lob,
 			spanner.NullString{}, spanner.NullFloat64{}, spanner.NullFloat64{},
 			true, spanner.CommitTimestamp,
 		}),
 		spanner.InsertOrUpdate("AppetiteRules", cols, []interface{}{
-			carrierID, "rule-ny", "NY", "auto",
+			carrierID, "rule-ny", "NY", lob,
 			spanner.NullString{}, spanner.NullFloat64{}, spanner.NullFloat64{},
 			true, spanner.CommitTimestamp,
 		}),
@@ -52,7 +53,7 @@ func TestAppetiteRepo_FindMatchingRules_RequiredOnly(t *testing.T) {
 
 	rules, err := repo.FindMatchingRules(ctx, domain.RiskClassification{
 		State:          "CA",
-		LineOfBusiness: "auto",
+		LineOfBusiness: lob,
 	})
 	if err != nil {
 		t.Fatalf("FindMatchingRules: %v", err)
@@ -71,20 +72,21 @@ func TestAppetiteRepo_FindMatchingRules_WithClassCode(t *testing.T) {
 	ctx := context.Background()
 
 	carrierID := shortID(t)
+	lob := "lob-" + carrierID[:8]
 	insertParentCarrier(t, client, carrierID)
 
 	cols := []string{"CarrierId", "RuleId", "State", "LineOfBusiness", "ClassCode", "MinPremium", "MaxPremium", "IsActive", "CreatedAt"}
 	mutations := []*spanner.Mutation{
 		// Rule with specific ClassCode.
 		spanner.InsertOrUpdate("AppetiteRules", cols, []interface{}{
-			carrierID, "rule-specific", "CA", "auto",
+			carrierID, "rule-specific", "CA", lob,
 			spanner.NullString{StringVal: "auto-commercial", Valid: true},
 			spanner.NullFloat64{}, spanner.NullFloat64{},
 			true, spanner.CommitTimestamp,
 		}),
 		// Rule with NULL ClassCode (wildcard).
 		spanner.InsertOrUpdate("AppetiteRules", cols, []interface{}{
-			carrierID, "rule-wildcard", "CA", "auto",
+			carrierID, "rule-wildcard", "CA", lob,
 			spanner.NullString{}, spanner.NullFloat64{}, spanner.NullFloat64{},
 			true, spanner.CommitTimestamp,
 		}),
@@ -95,7 +97,7 @@ func TestAppetiteRepo_FindMatchingRules_WithClassCode(t *testing.T) {
 
 	rules, err := repo.FindMatchingRules(ctx, domain.RiskClassification{
 		State:          "CA",
-		LineOfBusiness: "auto",
+		LineOfBusiness: lob,
 		ClassCode:      "auto-commercial",
 	})
 	if err != nil {
@@ -113,11 +115,12 @@ func TestAppetiteRepo_FindMatchingRules_PremiumRange(t *testing.T) {
 	ctx := context.Background()
 
 	carrierID := shortID(t)
+	lob := "lob-" + carrierID[:8]
 	insertParentCarrier(t, client, carrierID)
 
 	cols := []string{"CarrierId", "RuleId", "State", "LineOfBusiness", "ClassCode", "MinPremium", "MaxPremium", "IsActive", "CreatedAt"}
 	m := spanner.InsertOrUpdate("AppetiteRules", cols, []interface{}{
-		carrierID, "rule-range", "CA", "auto",
+		carrierID, "rule-range", "CA", lob,
 		spanner.NullString{},
 		spanner.NullFloat64{Float64: 1000, Valid: true},
 		spanner.NullFloat64{Float64: 5000, Valid: true},
@@ -130,7 +133,7 @@ func TestAppetiteRepo_FindMatchingRules_PremiumRange(t *testing.T) {
 	// Within range — should match.
 	rules, err := repo.FindMatchingRules(ctx, domain.RiskClassification{
 		State:            "CA",
-		LineOfBusiness:   "auto",
+		LineOfBusiness:   lob,
 		EstimatedPremium: 3000,
 	})
 	if err != nil {
@@ -143,7 +146,7 @@ func TestAppetiteRepo_FindMatchingRules_PremiumRange(t *testing.T) {
 	// Outside range — should not match.
 	rules, err = repo.FindMatchingRules(ctx, domain.RiskClassification{
 		State:            "CA",
-		LineOfBusiness:   "auto",
+		LineOfBusiness:   lob,
 		EstimatedPremium: 6000,
 	})
 	if err != nil {
