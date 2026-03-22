@@ -1,15 +1,22 @@
 ---
-summary: "Google Cloud Run reference for Go services"
-read_when: [Cloud Run deployment, service configuration, scaling, IAM setup]
+summary: "Cloud Run Go reference - container contract, scaling, Pub/Sub push, IAM, deployment"
+read_when: [Cloud Run deployment, service configuration, scaling, Pub/Sub integration]
 ---
 
-# Google Cloud Run -- Go Reference
+# Cloud Run with Go -- Comprehensive Reference
 
 ## 1. Container Contract
 
-### Port & Request Listening
+Cloud Run injects the `PORT` environment variable into the ingress container (default `8080`).
+The container **must** listen on `0.0.0.0:$PORT` -- never `127.0.0.1`.
 
-The ingress container must listen on `0.0.0.0` on the port specified by the `PORT` env var (default `8080`). The container must begin listening within **4 minutes** of startup.
+```go
+port := os.Getenv("PORT")
+if port == "" {
+    port = "8080"
+}
+srv := &http.Server{Addr: ":" + port, Handler: mux}
+```
 
 ### Injected Environment Variables
 
@@ -20,21 +27,32 @@ The ingress container must listen on `0.0.0.0` on the port specified by the `POR
 | `K_REVISION` | Revision name |
 | `K_CONFIGURATION` | Configuration name |
 
+### Execution Environment
+
+| Property | Gen 1 | Gen 2 |
+|---|---|---|
+| Sandbox | gVisor (limited syscalls) | Full Linux compatibility |
+| Min memory | 128 MiB | 512 MiB |
+| Jobs | Not available | Always gen2 |
+| DMI product name | -- | `Google Compute Engine` |
+
+Filesystem is **in-memory** (tmpfs); writes consume the instance's memory limit. Data does not persist when instances stop.
+
 ### Instance Lifecycle
 
-1. **Startup** -- must listen within 4 minutes; pending requests queue for up to 3.5x average startup time or 10 seconds (whichever is greater).
-2. **Processing** -- CPU allocated while handling requests (request-based billing) or always (instance-based billing).
-3. **Idle** -- instances kept idle up to 15 minutes; CPU allocation depends on billing mode.
+1. **Startup** -- must begin listening within **4 minutes**; startup CPU boost available.
+2. **Processing** -- CPU allocated to all containers while handling requests.
+3. **Idle** -- instances kept idle up to **15 minutes** (10 min for GPU); CPU allocation depends on billing mode.
 4. **Shutdown** -- `SIGTERM` sent with **10-second** grace period before `SIGKILL`.
 
 ### Request Timeout
 
-- Default: **300 seconds** (5 minutes)
-- Maximum: **3600 seconds** (60 minutes)
-- On timeout: connection closed, HTTP 504 returned; container keeps running (may interfere with subsequent requests on the same instance).
+- Default: **300 seconds** (5 minutes). Maximum: **3600 seconds** (60 minutes).
+- On timeout: HTTP 504 returned to client; container keeps running.
+- Outbound idle timeouts: **10 min** for VPC connections, **20 min** for internet.
 
 ```bash
-gcloud run deploy SERVICE --image IMAGE_URL --timeout=300s
+gcloud run deploy SERVICE --image IMAGE --timeout=300s
 ```
 
 ```yaml
@@ -46,101 +64,11 @@ spec:
       timeoutSeconds: 300
 ```
 
-For timeouts >15 min, implement retries and idempotent handlers.
+### Health Probes
 
-### CPU
+Startup probes disable liveness/readiness checks until the container is marked started.
 
-| Setting | Values |
-|---|---|
-| Fractional | 0.08 - <1.0 vCPU (0.01 increments) |
-| Standard | 1, 2, 4, 6, 8 vCPU |
-
-CPU allocation modes:
-- **Request-based** (default) -- CPU only during request processing. Fractional CPU requires this mode + concurrency=1 + gen1.
-- **Instance-based** (always-allocated) -- CPU for entire instance lifetime. Required for background work.
-
-#### Startup CPU Boost
-
-Temporary CPU increase during startup + 10 seconds after:
-
-| Base CPU | Boosted CPU |
-|---|---|
-| 0-1 | 2 |
-| 2 | 4 |
-| 4 | 8 |
-| 6-8 | 8 |
-
-```bash
-gcloud run services update SERVICE --cpu-boost
-gcloud run services update SERVICE --no-cpu-boost
-```
-
-```yaml
-metadata:
-  annotations:
-    run.googleapis.com/startup-cpu-boost: 'true'
-```
-
-### Memory
-
-- Default: **512 MiB**
-- Range: 128 MiB (gen1) / 512 MiB (gen2) to **32 GiB**
-- Formula: `(Standing Memory) + (Memory per Request) x (Concurrency)`
-- Filesystem is in-memory; written files consume the memory limit.
-
-CPU-to-memory constraints:
-
-| CPU | Max Memory |
-|---|---|
-| 1 vCPU | 4 GiB |
-| 2 vCPU | 8 GiB |
-| 4 vCPU | 16 GiB |
-| 6 vCPU | 24 GiB |
-| 8 vCPU | 32 GiB |
-
-```bash
-gcloud run deploy SERVICE --image IMAGE_URL --cpu=2 --memory=1Gi
-```
-
-```yaml
-resources:
-  limits:
-    cpu: "2"
-    memory: "1Gi"
-```
-
-### Concurrency
-
-- Default: **80** concurrent requests per instance.
-- Lower for CPU-heavy work (1 for serial processing); raise for I/O-bound work.
-- Adjust memory proportionally when changing concurrency.
-
-```bash
-gcloud run services update SERVICE --concurrency 80
-```
-
-```yaml
-spec:
-  template:
-    spec:
-      containerConcurrency: 80
-```
-
-### Execution Environment
-
-| | Gen 1 | Gen 2 |
-|---|---|---|
-| Sandbox | gVisor | Full Linux |
-| Syscalls | Limited | Full compatibility |
-| Network | Standard | Standard |
-| Min memory | 128 MiB | 512 MiB |
-| Jobs | Not available | Always gen2 |
-
-### Probes
-
-#### Startup Probe
-
-Default TCP startup probe on new services:
+**Default TCP startup probe:**
 
 ```yaml
 startupProbe:
@@ -151,7 +79,7 @@ startupProbe:
   failureThreshold: 1
 ```
 
-HTTP startup probe:
+**HTTP startup probe:**
 
 ```yaml
 startupProbe:
@@ -160,18 +88,11 @@ startupProbe:
     port: 8080
   initialDelaySeconds: 0
   timeoutSeconds: 1
-  failureThreshold: 3
   periodSeconds: 10
+  failureThreshold: 3
 ```
 
-```bash
-gcloud run deploy SERVICE --image IMAGE_URL \
-  --startup-probe httpGet.path=/healthz,httpGet.port=8080
-```
-
-#### Liveness Probe
-
-On failure: container receives `SIGKILL`, requests get HTTP 503, new instance starts.
+**Liveness probe** (HTTP -- restarts container on failure):
 
 ```yaml
 livenessProbe:
@@ -180,63 +101,51 @@ livenessProbe:
     port: 8080
   initialDelaySeconds: 0
   timeoutSeconds: 1
-  failureThreshold: 3
   periodSeconds: 10
+  failureThreshold: 3
 ```
 
-```bash
-gcloud run deploy SERVICE --image IMAGE_URL \
-  --liveness-probe httpGet.path=/healthz,httpGet.port=8080,periodSeconds=10
-```
-
-Probes always have CPU allocated and are billed for CPU/memory but not per-request.
-
-### Scaling: Min & Max Instances
-
-```bash
-# Min instances (service-level, preferred)
-gcloud run services update SERVICE --min 1
-
-# Max instances (revision default: 100)
-gcloud run services update SERVICE --max 50
-```
+**Readiness probe** (preview -- stops sending traffic on failure):
 
 ```yaml
-# Service-level annotations
-metadata:
-  annotations:
-    run.googleapis.com/minScale: '1'
-    run.googleapis.com/maxScale: '50'
-
-# Revision-level annotations
-spec:
-  template:
-    metadata:
-      annotations:
-        autoscaling.knative.dev/minScale: '1'
-        autoscaling.knative.dev/maxScale: '50'
+readinessProbe:
+  httpGet:
+    path: /readyz
+    port: 8080
+  periodSeconds: 10
+  successThreshold: 2
+  failureThreshold: 3
+  timeoutSeconds: 1
 ```
 
-Terraform:
+Configurable parameter ranges:
 
-```hcl
-resource "google_cloud_run_v2_service" "default" {
-  template {
-    scaling {
-      min_instance_count = 1
-      max_instance_count = 50
-    }
-  }
-}
-```
+| Parameter | Startup | Liveness | Readiness |
+|---|---|---|---|
+| `initialDelaySeconds` | 0-240 | 0-240 | -- |
+| `periodSeconds` | 1-240 | 1-3600 | 1-300 |
+| `failureThreshold` | configurable | configurable | configurable |
+| `timeoutSeconds` | 1-240 | 1-3600 | 1-300 |
 
-With traffic splitting, min/max instances are distributed proportionally across revisions.
+Probe types: **HTTP** (2xx/3xx = success), **TCP** (connection established = success), **gRPC** (requires gRPC Health Checking protocol).
+
+### Metadata Server
+
+Available at `http://metadata.google.internal/` with header `Metadata-Flavor: Google`.
+
+| Path | Returns |
+|---|---|
+| `/computeMetadata/v1/project/project-id` | Project ID |
+| `/computeMetadata/v1/instance/region` | Instance region |
+| `/computeMetadata/v1/instance/service-accounts/default/email` | SA email |
+| `/computeMetadata/v1/instance/service-accounts/default/token` | OAuth2 access token |
+| `/computeMetadata/v1/instance/service-accounts/default/identity?audience=URL` | OIDC ID token |
 
 ---
 
-## 2. Go on Cloud Run
+## 2. Go Best Practices
 
-### Graceful Shutdown with signal.NotifyContext
+### Graceful Shutdown with signal.NotifyContext + http.Server.Shutdown
 
 ```go
 package main
@@ -252,102 +161,215 @@ import (
 )
 
 func main() {
+	// Trap SIGTERM (Cloud Run shutdown) and SIGINT (local dev).
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
-
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, _ *http.Request) {
+		// Check downstream dependencies here.
 		w.WriteHeader(http.StatusOK)
 	})
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("ok"))
 	})
 
-	srv := &http.Server{
-		Addr:    ":" + port,
-		Handler: mux,
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
 	}
 
-	// Start server in goroutine.
+	srv := &http.Server{
+		Addr:         ":" + port,
+		Handler:      mux,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  120 * time.Second,
+	}
+
+	// Start server in background goroutine.
 	go func() {
 		slog.Info("server starting", "port", port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			slog.Error("server error", "err", err)
+			slog.Error("listen failed", "error", err)
 			os.Exit(1)
 		}
 	}()
 
-	// Block until SIGTERM/SIGINT.
+	// Block until SIGTERM received.
 	<-ctx.Done()
 	slog.Info("shutdown signal received")
 
-	// 8-second deadline (Cloud Run gives 10s after SIGTERM).
+	// Give in-flight requests up to 8 seconds to complete
+	// (leaving 2s buffer before SIGKILL at 10s).
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
-		slog.Error("server shutdown error", "err", err)
+		slog.Error("server shutdown error", "error", err)
 	}
 	slog.Info("server stopped")
 }
 ```
 
-### Structured Logging with slog
+### Structured Logging with slog to stderr (JSON Handler for Cloud Logging)
 
-Cloud Run picks up JSON written to `stderr`/`stdout` and parses special fields automatically.
+Cloud Run captures JSON written to `stderr` and parses it into Cloud Logging's structured format. Map `slog` field names to Cloud Logging's expected keys:
+
+| slog key | Cloud Logging key |
+|---|---|
+| `msg` | `message` |
+| `level` | `severity` |
+| `source` | `logging.googleapis.com/sourceLocation` |
 
 ```go
-package main
+package logging
 
 import (
+	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
+
+	"cloud.google.com/go/compute/metadata"
 )
 
-func init() {
-	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	}))
-	slog.SetDefault(logger)
+// LevelCritical maps to Cloud Logging CRITICAL severity.
+const LevelCritical = slog.Level(12)
+
+// SetupLogging configures slog with a JSON handler that maps to Cloud Logging fields.
+func SetupLogging() {
+	h := slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
+		AddSource: true,
+		Level:     slog.LevelDebug,
+		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+			if groups != nil {
+				return a
+			}
+			switch a.Key {
+			case slog.MessageKey:
+				a.Key = "message"
+			case slog.SourceKey:
+				a.Key = "logging.googleapis.com/sourceLocation"
+			case slog.LevelKey:
+				a.Key = "severity"
+				level := a.Value.Any().(slog.Level)
+				if level == LevelCritical {
+					a.Value = slog.StringValue("CRITICAL")
+				}
+			}
+			return a
+		},
+	})
+	slog.SetDefault(slog.New(&traceHandler{handler: h}))
+}
+
+// traceHandler injects the Cloud Trace ID from context into every log record.
+type traceHandler struct {
+	handler slog.Handler
+}
+
+type traceKey struct{}
+
+func (h *traceHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	return h.handler.Enabled(ctx, level)
+}
+
+func (h *traceHandler) Handle(ctx context.Context, rec slog.Record) error {
+	if trace, ok := ctx.Value(traceKey{}).(string); ok && trace != "" {
+		rec = rec.Clone()
+		rec.Add("logging.googleapis.com/trace", slog.StringValue(trace))
+	}
+	return h.handler.Handle(ctx, rec)
+}
+
+func (h *traceHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return &traceHandler{handler: h.handler.WithAttrs(attrs)}
+}
+
+func (h *traceHandler) WithGroup(name string) slog.Handler {
+	return &traceHandler{handler: h.handler.WithGroup(name)}
+}
+
+// WithCloudTraceContext is HTTP middleware that extracts the trace ID
+// from the X-Cloud-Trace-Context header and stores it in the request context.
+func WithCloudTraceContext(next http.Handler) http.Handler {
+	projectID, _ := metadata.ProjectIDWithContext(context.Background())
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var trace string
+		traceHeader := r.Header.Get("X-Cloud-Trace-Context")
+		parts := strings.Split(traceHeader, "/")
+		if len(parts) > 0 && parts[0] != "" {
+			trace = fmt.Sprintf("projects/%s/traces/%s", projectID, parts[0])
+		}
+		ctx := context.WithValue(r.Context(), traceKey{}, trace)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
 ```
 
-For request-correlated logging, extract the trace from the `X-Cloud-Trace-Context` header:
+Usage:
 
 ```go
-func withTrace(r *http.Request, projectID string) slog.Attr {
-	traceHeader := r.Header.Get("X-Cloud-Trace-Context")
-	if traceHeader == "" {
-		return slog.Attr{}
-	}
-	parts := strings.SplitN(traceHeader, "/", 2)
-	if len(parts) == 0 {
-		return slog.Attr{}
-	}
-	trace := fmt.Sprintf("projects/%s/traces/%s", projectID, parts[0])
-	return slog.String("logging.googleapis.com/trace", trace)
+func main() {
+    logging.SetupLogging()
+
+    mux := http.NewServeMux()
+    mux.HandleFunc("GET /", handleRoot)
+
+    // Wrap with trace middleware.
+    handler := logging.WithCloudTraceContext(mux)
+
+    srv := &http.Server{Addr: ":8080", Handler: handler}
+    // ...
 }
 
-// Usage in handler:
-func handler(w http.ResponseWriter, r *http.Request) {
-	slog.Info("processing request",
-		withTrace(r, "my-project-id"),
-		"method", r.Method,
-		"path", r.URL.Path,
-	)
+func handleRoot(w http.ResponseWriter, r *http.Request) {
+    slog.InfoContext(r.Context(), "request received",
+        "method", r.Method,
+        "path",   r.URL.Path,
+    )
+    w.Write([]byte("ok"))
 }
 ```
 
-Cloud Logging special JSON fields:
-- `severity` -- maps to log severity (slog levels map naturally: INFO, WARN, ERROR)
-- `message` -- display text
-- `logging.googleapis.com/trace` -- enables log correlation with request traces
+Cloud Logging special JSON fields reference:
+
+```json
+{
+  "severity": "ERROR",
+  "message": "something failed",
+  "logging.googleapis.com/trace": "projects/my-project/traces/abc123",
+  "logging.googleapis.com/spanId": "000000000000004a",
+  "logging.googleapis.com/sourceLocation": {"file": "main.go", "line": "42", "function": "main.handler"},
+  "logging.googleapis.com/labels": {"request_id": "xyz"},
+  "logging.googleapis.com/insertId": "unique-id"
+}
+```
+
+### Health Check Endpoints
+
+```go
+// /healthz -- liveness: is the process alive and not deadlocked?
+mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+    w.WriteHeader(http.StatusOK)
+})
+
+// /readyz -- readiness: can the instance accept traffic? (DB, caches, etc.)
+mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
+    if err := db.PingContext(r.Context()); err != nil {
+        http.Error(w, "not ready", http.StatusServiceUnavailable)
+        return
+    }
+    w.WriteHeader(http.StatusOK)
+})
+```
 
 ### Global State & Lazy Initialization
 
@@ -355,80 +377,84 @@ Leverage instance reuse -- expensive init once at cold start:
 
 ```go
 var (
-	client     *storage.Client
-	clientOnce sync.Once
+    client     *storage.Client
+    clientOnce sync.Once
 )
 
 func getClient(ctx context.Context) *storage.Client {
-	clientOnce.Do(func() {
-		var err error
-		client, err = storage.NewClient(ctx)
-		if err != nil {
-			slog.Error("storage client init failed", "err", err)
-		}
-	})
-	return client
+    clientOnce.Do(func() {
+        var err error
+        client, err = storage.NewClient(ctx)
+        if err != nil {
+            slog.Error("storage client init failed", "err", err)
+        }
+    })
+    return client
 }
 ```
 
-### Health Check Endpoint
+---
 
-```go
-mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusOK)
-})
+## 3. Dockerfile
 
-// Or with dependency checks:
-mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
-	if err := db.PingContext(r.Context()); err != nil {
-		http.Error(w, "db unreachable", http.StatusServiceUnavailable)
-		return
-	}
-	w.WriteHeader(http.StatusOK)
-})
-```
-
-### Dockerfile -- Multi-stage with Distroless
+Multi-stage build producing a minimal image:
 
 ```dockerfile
-# Build stage
-FROM golang:1.23 AS builder
+# ---- Build stage ----
+FROM golang:1.23-bookworm AS builder
+
 WORKDIR /app
+
 COPY go.mod go.sum ./
 RUN go mod download
-COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o server .
 
-# Runtime stage
+COPY . .
+
+# Static binary, no CGO. Strip debug symbols for smaller binary.
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -trimpath -ldflags="-s -w" -o /server ./cmd/server
+
+# ---- Runtime stage ----
 FROM gcr.io/distroless/static-debian12:nonroot
-COPY --from=builder /app/server /server
+
+COPY --from=builder /server /server
+
+# Cloud Run injects PORT; 8080 is the documented default.
 EXPOSE 8080
+
+USER nonroot:nonroot
+
 ENTRYPOINT ["/server"]
 ```
 
-Alternative with scratch (smaller, no shell/debug tools):
+Alternative with scratch (even smaller, but no CA certs or tzdata bundled):
 
 ```dockerfile
-FROM golang:1.23 AS builder
+FROM golang:1.23-bookworm AS builder
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o server .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -trimpath -ldflags="-s -w" -o /server ./cmd/server
 
 FROM scratch
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
-COPY --from=builder /app/server /server
+COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
+COPY --from=builder /server /server
 EXPOSE 8080
 ENTRYPOINT ["/server"]
 ```
 
 Key points:
-- `CGO_ENABLED=0` for static binary (required for scratch/distroless).
-- `-ldflags="-s -w"` strips debug info, reduces binary size.
-- Copy CA certs when using scratch (needed for HTTPS calls).
+
+- `CGO_ENABLED=0` produces a fully static binary (no libc dependency) -- **required** for scratch/distroless.
+- `gcr.io/distroless/static-debian12:nonroot` includes CA certs and tzdata but no shell -- minimal attack surface.
+- `-trimpath` removes local filesystem paths from binary. `-ldflags="-s -w"` strips symbol/DWARF tables.
+- For scratch: manually copy CA certs and timezone data.
 - Use `nonroot` distroless tag to avoid running as root.
-- Do not include `~/.config/gcloud/gce` in the image.
+
+For an even simpler workflow, use **ko** (`ko build ./cmd/server`) which produces distroless images automatically without a Dockerfile.
 
 ### .dockerignore
 
@@ -440,17 +466,183 @@ vendor/
 
 ---
 
-## 3. Cloud Run + Pub/Sub
+## 4. Concurrency & Scaling
+
+### Max Concurrency
+
+Maximum concurrent requests a single instance handles simultaneously.
+
+| Deployed via | Default concurrency |
+|---|---|
+| gcloud / Terraform | 80 * number of vCPUs |
+| Console | 80 |
+
+Maximum configurable value: **1000**. The autoscaler targets **60% of max concurrency** over a 1-minute window.
+
+```bash
+# Set concurrency
+gcloud run services update SERVICE --concurrency 100
+
+# Reset to default
+gcloud run services update SERVICE --concurrency default
+```
+
+```yaml
+spec:
+  template:
+    spec:
+      containerConcurrency: 100
+```
+
+Guidelines:
+- **Lower to 1** for CPU-heavy serial processing or when each request consumes most available resources.
+- **Raise for I/O-bound** or multi-threaded applications.
+- Higher concurrency = fewer instances = lower cost, but requires the app to handle parallel requests efficiently.
+- For single-threaded apps, keep at 1 vCPU -- multi-vCPU with single-threaded code prevents CPU-based autoscaling.
+
+### Min Instances
+
+Keep instances warm to reduce cold starts. Default: **0** (scale to zero).
+
+```bash
+gcloud run deploy SERVICE --image IMAGE --min 2
+gcloud run services update SERVICE --min 2
+
+# Clear (back to 0)
+gcloud run services update SERVICE --min default
+```
+
+```yaml
+metadata:
+  annotations:
+    run.googleapis.com/minScale: '2'
+```
+
+Revision-level:
+
+```yaml
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: '2'
+```
+
+Billing: idle min-instances are billed at a **reduced rate** under request-based billing, or at the full rate under instance-based billing. Consider Committed Use Discounts for predictable charges.
+
+### Max Instances
+
+Default: **100** per revision. All services have a max-instances limit even if unset.
+
+```bash
+gcloud run deploy SERVICE --image IMAGE --max 50
+gcloud run services update SERVICE --max 50
+```
+
+```yaml
+metadata:
+  annotations:
+    run.googleapis.com/maxScale: '50'
+```
+
+When max is reached, excess requests queue for up to **3.5x average startup time** or **10 seconds** (whichever is greater), then return `429`. Cloud Run may briefly exceed the limit during traffic spikes.
+
+### CPU Configuration
+
+Supported vCPU values:
+- Fractional: 0.08 -- 1.0 (increments of 0.001)
+- Integer: 2, 4, 6, 8
+
+CPU-to-memory constraints:
+
+| CPU | Max Memory |
+|---|---|
+| 0.08-0.5 vCPU | 512 MiB |
+| 1 vCPU | 4 GiB |
+| 2 vCPU | 8 GiB |
+| 4 vCPU | 16 GiB |
+| 6 vCPU | 24 GiB |
+| 8 vCPU | 32 GiB |
+
+Sub-1 vCPU restrictions: max 512 MiB memory, concurrency must be 1, request-based billing only, gen1 required.
+
+```bash
+gcloud run deploy SERVICE --image IMAGE --cpu=2 --memory=1Gi
+```
+
+```yaml
+resources:
+  limits:
+    cpu: "2"
+    memory: "1Gi"
+```
+
+### CPU Allocation Modes
+
+| Mode | Behavior | Use case |
+|---|---|---|
+| Request-based (default) | CPU allocated only during request processing | Intermittent traffic |
+| Instance-based (always-on) | CPU allocated for entire instance lifetime | Background work, websockets, streaming |
+
+```bash
+# Always-on CPU
+gcloud run services update SERVICE --no-cpu-throttling
+
+# Request-based (default)
+gcloud run services update SERVICE --cpu-throttling
+```
+
+### Startup CPU Boost
+
+Temporarily increases CPU during container startup + 10 seconds after:
+
+| Configured CPU | Boosted CPU |
+|---|---|
+| <= 1 | 2 |
+| 2 | 4 |
+| 4 | 8 |
+| 6-8 | 8 |
+
+```bash
+gcloud run services update SERVICE --cpu-boost
+gcloud run services update SERVICE --no-cpu-boost
+```
+
+```yaml
+metadata:
+  annotations:
+    run.googleapis.com/startup-cpu-boost: 'true'
+```
+
+You are billed for boosted CPU during the boost period.
+
+### Scaling Behavior
+
+Autoscaler signals:
+1. **Request concurrency** -- targets 60% of max concurrency over 1-minute window.
+2. **CPU utilization** -- targets 60% CPU utilization over 1-minute window.
+3. **Incoming request rate** -- scales based on rate of incoming requests.
+
+Cold start mitigation:
+- Set `--min 1` to keep warm instances.
+- Enable `--cpu-boost` for faster startup.
+- Use small container images (distroless/scratch).
+- Initialize expensive resources lazily with `sync.Once`.
+- Idle instances kept up to **15 minutes** before shutdown.
+
+---
+
+## 5. Pub/Sub Push
+
+Cloud Run receives Pub/Sub messages as HTTP POST requests. The push subscription sends a JSON envelope with base64-encoded data.
 
 ### Push Subscription Setup
-
-Pub/Sub delivers messages as HTTP POST requests to the Cloud Run service URL.
 
 ```bash
 # Create topic
 gcloud pubsub topics create my-topic
 
-# Create service account for invocation
+# Create service account for push invocation
 gcloud iam service-accounts create pubsub-invoker \
   --display-name "Pub/Sub Invoker"
 
@@ -478,7 +670,7 @@ gcloud pubsub subscriptions create my-sub \
 ```json
 {
   "message": {
-    "data": "<base64-encoded-payload>",
+    "data": "SGVsbG8gV29ybGQ=",
     "attributes": { "key": "value" },
     "messageId": "123456789",
     "publishTime": "2024-01-01T00:00:00Z"
@@ -487,32 +679,47 @@ gcloud pubsub subscriptions create my-sub \
 }
 ```
 
+The `data` field is base64-encoded. When unmarshalled into a `[]byte` field with `encoding/json`, Go automatically decodes the base64.
+
 ### Go Handler
 
 ```go
-type PubSubMessage struct {
+// PubSubEnvelope is the push delivery wrapper.
+type PubSubEnvelope struct {
 	Message struct {
-		Data       []byte            `json:"data,omitempty"`
-		Attributes map[string]string `json:"attributes,omitempty"`
-		ID         string            `json:"messageId"`
+		Data        []byte            `json:"data,omitempty"` // auto base64-decoded by encoding/json
+		Attributes  map[string]string `json:"attributes,omitempty"`
+		ID          string            `json:"messageId"`
+		PublishTime string            `json:"publishTime"`
 	} `json:"message"`
 	Subscription string `json:"subscription"`
 }
 
-func pubsubHandler(w http.ResponseWriter, r *http.Request) {
-	var msg PubSubMessage
-	if err := json.NewDecoder(r.Body).Decode(&msg); err != nil {
-		slog.Error("decode failed", "err", err)
+func handlePubSub(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		slog.ErrorContext(r.Context(), "read body failed", "error", err)
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	var env PubSubEnvelope
+	if err := json.Unmarshal(body, &env); err != nil {
+		slog.ErrorContext(r.Context(), "unmarshal failed", "error", err)
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
 
-	data := string(msg.Message.Data) // already decoded from base64 by json.Unmarshal
-	slog.Info("received message", "id", msg.Message.ID, "data", data)
+	slog.InfoContext(r.Context(), "pubsub message received",
+		"messageId", env.Message.ID,
+		"data", string(env.Message.Data),
+	)
 
-	// Process message...
+	// Process the message...
 
-	w.WriteHeader(http.StatusOK) // 200/204 = ack
+	// Return 2xx to ACK. Any non-2xx triggers redelivery.
+	w.WriteHeader(http.StatusOK)
 }
 ```
 
@@ -521,12 +728,36 @@ func pubsubHandler(w http.ResponseWriter, r *http.Request) {
 | HTTP Response | Pub/Sub Action |
 |---|---|
 | 200, 201, 202, 204 | Acknowledge (message consumed) |
-| 102, 4xx, 5xx | Nack (message retried) |
+| 102, 4xx, 5xx | Nack (message retried with backoff) |
 
-- Ack deadline default in example: 600 seconds.
-- Messages not acknowledged within the deadline are redelivered.
-- Unhandled errors or container crashes cause redelivery.
-- Implement idempotent handlers to handle redeliveries safely.
+Messages not acknowledged within the ack deadline are redelivered. Implement **idempotent handlers** to handle redeliveries safely.
+
+### OIDC Token Validation
+
+When the push subscription is configured with OIDC authentication, Pub/Sub attaches a JWT in the `Authorization: Bearer <token>` header.
+
+**For Cloud Run services: validation is automatic.** Cloud Run verifies the token and checks that the push subscription's service account has `roles/run.invoker`. No application-level validation needed.
+
+For manual validation (e.g., behind a load balancer without Cloud Run's built-in check):
+
+```go
+import "google.golang.org/api/idtoken"
+
+func validatePubSubToken(r *http.Request, audience string) error {
+	authHeader := r.Header.Get("Authorization")
+	if !strings.HasPrefix(authHeader, "Bearer ") {
+		return fmt.Errorf("missing bearer token")
+	}
+	token := strings.TrimPrefix(authHeader, "Bearer ")
+
+	payload, err := idtoken.Validate(r.Context(), token, audience)
+	if err != nil {
+		return fmt.Errorf("invalid token: %w", err)
+	}
+	slog.Info("token validated", "email", payload.Claims["email"])
+	return nil
+}
+```
 
 ### Terraform
 
@@ -549,18 +780,18 @@ resource "google_pubsub_subscription" "push" {
 
 ---
 
-## 4. Cloud Run + Eventarc
+## 6. Eventarc Triggers
 
-Eventarc delivers events in **CloudEvents** format via HTTP POST. Two editions exist: Standard (simple trigger-based) and Advanced (many-to-many with transformation).
+Eventarc delivers events in **CloudEvents v1.0** format via HTTP POST (binary content mode).
 
-### Direct Cloud Storage Events
+### Cloud Storage Events
 
-Four event types:
+Four direct event types:
 
 | Event Type | Trigger |
 |---|---|
 | `google.cloud.storage.object.v1.finalized` | Object created or overwritten |
-| `google.cloud.storage.object.v1.deleted` | Object soft-deleted |
+| `google.cloud.storage.object.v1.deleted` | Object deleted |
 | `google.cloud.storage.object.v1.archived` | Live version becomes noncurrent |
 | `google.cloud.storage.object.v1.metadataUpdated` | Object metadata changed |
 
@@ -575,20 +806,36 @@ gcloud projects add-iam-policy-binding PROJECT_ID \
   --role="roles/pubsub.publisher"
 
 # Create trigger
-gcloud eventarc triggers create gcs-trigger \
+gcloud eventarc triggers create storage-trigger \
   --location=us-central1 \
   --destination-run-service=my-service \
   --destination-run-region=us-central1 \
   --event-filters="type=google.cloud.storage.object.v1.finalized" \
   --event-filters="bucket=my-bucket" \
-  --service-account=eventarc-sa@PROJECT_ID.iam.gserviceaccount.com
+  --service-account=PROJECT_NUMBER-compute@developer.gserviceaccount.com
 ```
 
 Constraints:
-- Bucket must be in same project and region as the trigger.
+- Bucket must be in same project and region/multi-region as the trigger.
 - Max 10 notifications per bucket.
 - Trigger event filters cannot be changed after creation.
 - Propagation takes up to 2 minutes.
+
+### Spanner Change Stream Events
+
+Spanner change streams emit events through Pub/Sub. Route via Eventarc:
+
+```bash
+gcloud eventarc triggers create spanner-trigger \
+  --location=us-central1 \
+  --destination-run-service=my-service \
+  --destination-run-region=us-central1 \
+  --event-filters="type=google.cloud.pubsub.topic.v1.messagePublished" \
+  --transport-topic=projects/PROJECT_ID/topics/SPANNER_CHANGE_TOPIC \
+  --service-account=PROJECT_NUMBER-compute@developer.gserviceaccount.com
+```
+
+The Spanner change record arrives as base64-encoded data in the Pub/Sub push format (see Section 5).
 
 ### Audit Log Events
 
@@ -602,112 +849,174 @@ gcloud eventarc triggers create audit-trigger \
   --event-filters="type=google.cloud.audit.log.v1.written" \
   --event-filters="serviceName=bigquery.googleapis.com" \
   --event-filters="methodName=google.cloud.bigquery.v2.JobService.InsertJob" \
-  --service-account=eventarc-sa@PROJECT_ID.iam.gserviceaccount.com
+  --service-account=PROJECT_NUMBER-compute@developer.gserviceaccount.com
 ```
 
-All three filters (`type`, `serviceName`, `methodName`) are mandatory. Optional resource filtering with path patterns:
+All three filters (`type`, `serviceName`, `methodName`) are mandatory.
 
-```bash
---event-filters-path-pattern="resourceName=projects/_/buckets/**/r*.txt"
-```
+### CloudEvents Format
 
-### Pub/Sub Custom Events
+The CloudEvent HTTP headers contain metadata in binary content mode:
 
-Any Pub/Sub topic can trigger a Cloud Run service via Eventarc:
-
-```bash
-gcloud eventarc triggers create pubsub-trigger \
-  --location=us-central1 \
-  --destination-run-service=my-service \
-  --destination-run-region=us-central1 \
-  --event-filters="type=google.cloud.pubsub.topic.v1.messagePublished" \
-  --transport-topic=projects/PROJECT_ID/topics/my-topic \
-  --service-account=eventarc-sa@PROJECT_ID.iam.gserviceaccount.com
-```
+| Header | Maps to |
+|---|---|
+| `ce-type` | Event type (e.g., `google.cloud.storage.object.v1.finalized`) |
+| `ce-source` | Source (e.g., `//storage.googleapis.com/projects/_/buckets/BUCKET`) |
+| `ce-subject` | Object path (e.g., `objects/my-file.txt`) |
+| `ce-id` | Unique event ID |
+| `ce-time` | Event timestamp (RFC 3339) |
+| `Content-Type` | `application/json` |
 
 ### Go CloudEvents Handler
 
+Use the CloudEvents SDK (`github.com/cloudevents/sdk-go/v2`):
+
 ```go
+package main
+
 import (
+	"context"
+	"log/slog"
+	"net/http"
+	"os"
+	"time"
+
 	cloudevents "github.com/cloudevents/sdk-go/v2"
 )
 
+// StorageObjectData represents the Cloud Storage object payload.
 type StorageObjectData struct {
-	Bucket string `json:"bucket"`
-	Name   string `json:"name"`
-	Size   string `json:"size"`
+	Bucket         string    `json:"bucket"`
+	Name           string    `json:"name"`
+	ContentType    string    `json:"contentType"`
+	Size           string    `json:"size"`
+	TimeCreated    time.Time `json:"timeCreated"`
+	Updated        time.Time `json:"updated"`
+	Metageneration string    `json:"metageneration"`
 }
 
-func cloudEventHandler(w http.ResponseWriter, r *http.Request) {
+func handleCloudEvent(w http.ResponseWriter, r *http.Request) {
 	event, err := cloudevents.NewEventFromHTTPRequest(r)
 	if err != nil {
-		http.Error(w, "parse error", http.StatusBadRequest)
+		slog.Error("failed to parse CloudEvent", "error", err)
+		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
 
-	slog.Info("received event",
+	slog.Info("event received",
 		"type", event.Type(),
 		"source", event.Source(),
+		"subject", event.Subject(),
 		"id", event.ID(),
 	)
 
 	var data StorageObjectData
 	if err := event.DataAs(&data); err != nil {
-		http.Error(w, "data parse error", http.StatusBadRequest)
+		slog.Error("failed to parse event data", "error", err)
+		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
 
-	slog.Info("storage event", "bucket", data.Bucket, "object", data.Name)
+	slog.Info("storage object",
+		"bucket", data.Bucket,
+		"name", data.Name,
+		"contentType", data.ContentType,
+		"size", data.Size,
+	)
+
 	w.WriteHeader(http.StatusOK)
 }
 ```
 
+Alternative: receiver pattern (starts its own HTTP server):
+
+```go
+func receive(event cloudevents.Event) {
+	slog.Info("received", "type", event.Type(), "id", event.ID())
+}
+
+func main() {
+	c, err := cloudevents.NewClientHTTP()
+	if err != nil {
+		slog.Error("failed to create client", "error", err)
+		os.Exit(1)
+	}
+	if err = c.StartReceiver(context.Background(), receive); err != nil {
+		slog.Error("failed to start receiver", "error", err)
+		os.Exit(1)
+	}
+}
+```
+
+### Required IAM for Eventarc
+
+```bash
+# Grant the compute service account permission to invoke Cloud Run
+gcloud run services add-iam-policy-binding my-service \
+  --member="serviceAccount:PROJECT_NUMBER-compute@developer.gserviceaccount.com" \
+  --role="roles/run.invoker"
+
+# Grant Eventarc event receiver role
+gcloud projects add-iam-policy-binding PROJECT_ID \
+  --member="serviceAccount:PROJECT_NUMBER-compute@developer.gserviceaccount.com" \
+  --role="roles/eventarc.eventReceiver"
+```
+
 ---
 
-## 5. IAM & Security
+## 7. IAM & Security
 
-### Service Identity
+### Service Accounts
 
 Two identities in play:
 - **Deployer** -- user or SA that calls Cloud Run Admin API.
 - **Runtime service identity** -- SA used when the container calls GCP APIs.
 
-Always use a dedicated **user-managed service account** (not the Compute Engine default SA).
+Always use a dedicated **user-managed service account** with least privilege (not the Compute Engine default SA).
 
 ```bash
 # Create dedicated SA
 gcloud iam service-accounts create my-service-sa \
-  --display-name "My Service Runtime SA"
+  --display-name="My Service Runtime SA"
 
 # Deploy with custom SA
-gcloud run deploy my-service --image IMAGE_URL \
+gcloud run deploy my-service \
+  --image IMAGE \
   --service-account=my-service-sa@PROJECT_ID.iam.gserviceaccount.com
 ```
 
-### Invoker IAM Binding
+### Key IAM Roles
 
-Control who/what can call the service:
+| Role | Description | Permissions (key) |
+|---|---|---|
+| `roles/run.admin` | Full control over all Cloud Run resources | CRUD services/jobs, set IAM policies |
+| `roles/run.developer` | Deploy and manage services/jobs | CRUD services/jobs, get (not set) IAM policies |
+| `roles/run.invoker` | Invoke services, run/cancel jobs | `run.routes.invoke`, `run.jobs.run` |
+| `roles/run.viewer` | Read-only access | View services, jobs, get IAM policies |
+
+### Making Services Public or Private
 
 ```bash
-# Allow a specific SA
-gcloud run services add-iam-policy-binding my-service \
-  --member=serviceAccount:caller@PROJECT_ID.iam.gserviceaccount.com \
-  --role=roles/run.invoker
+# Public -- disable invoker IAM check (recommended for public APIs)
+gcloud run deploy my-service --no-invoker-iam-check
 
-# Allow all authenticated users
+# Public -- alternative: grant allUsers the invoker role
 gcloud run services add-iam-policy-binding my-service \
-  --member=allUsers \
-  --role=roles/run.invoker
+  --member="allUsers" \
+  --role="roles/run.invoker"
 
-# Allow all authenticated Google accounts
+# Private -- require authentication (default)
+gcloud run deploy my-service --invoker-iam-check
+
+# Grant specific SA access
 gcloud run services add-iam-policy-binding my-service \
-  --member=allAuthenticatedUsers \
-  --role=roles/run.invoker
+  --member="serviceAccount:caller@PROJECT_ID.iam.gserviceaccount.com" \
+  --role="roles/run.invoker"
 ```
 
 ### Service-to-Service Authentication
 
-The calling service fetches an ID token from the metadata server and sends it as a Bearer token:
+The calling service fetches an ID token and sends it as a Bearer token:
 
 ```go
 import "google.golang.org/api/idtoken"
@@ -726,44 +1035,37 @@ func callService(ctx context.Context, targetURL string) error {
 }
 ```
 
-### Key IAM Roles
-
-| Role | Purpose |
-|---|---|
-| `roles/run.invoker` | Invoke a Cloud Run service |
-| `roles/run.developer` | Deploy and manage services |
-| `roles/run.admin` | Full admin (deploy, IAM, config) |
-| `roles/iam.serviceAccountUser` | Act as a service account |
-| `roles/secretmanager.secretAccessor` | Access secrets from Secret Manager |
+The token's `aud` claim must match the receiving service's URL or a configured custom audience. Tokens expire after ~1 hour; the `idtoken` client handles refresh automatically.
 
 ### Ingress Settings
 
+Control which network paths can reach the service.
+
 | Setting | Allows |
 |---|---|
-| `all` | All traffic including direct internet |
-| `internal` | VPC, Shared VPC, GCP services (Scheduler, Tasks, Pub/Sub, Eventarc) only |
-| `internal-and-cloud-load-balancing` | Internal + external Application Load Balancer |
+| `all` (default) | All traffic including direct internet to `*.run.app` URL |
+| `internal` | VPC traffic, Shared VPC, and GCP managed services (Pub/Sub, Scheduler, Tasks, Eventarc, Workflows) |
+| `internal-and-cloud-load-balancing` | Internal + external via Application Load Balancer only (blocks direct `run.app` access) |
 
 ```bash
-gcloud run deploy SERVICE --image IMAGE_URL --ingress internal
-
-gcloud run services update SERVICE --ingress internal-and-cloud-load-balancing
+gcloud run deploy my-service --image IMAGE --ingress internal
+gcloud run services update my-service --ingress internal-and-cloud-load-balancing
 ```
 
 ```yaml
 metadata:
   annotations:
-    run.googleapis.com/ingress: internal
+    run.googleapis.com/ingress: internal-and-cloud-load-balancing
 ```
 
-Use `internal-and-cloud-load-balancing` to enable Cloud Armor, IAP, and CDN while blocking direct `run.app` URL access.
+Use `internal-and-cloud-load-balancing` to enable Cloud Armor, IAP, and CDN while blocking direct `run.app` URL access. Administrators can restrict allowed ingress settings via the `run.allowedIngress` organization policy.
 
-### VPC Connectors
+### VPC Connectors (Egress)
 
-Enable private network egress from Cloud Run to VPC resources:
+Enable private network egress from Cloud Run to VPC resources. Each connector needs a `/28` subnet.
 
 ```bash
-# Create connector (requires /28 subnet)
+# Create connector
 gcloud compute networks vpc-access connectors create my-connector \
   --region us-central1 \
   --subnet my-subnet \
@@ -771,10 +1073,14 @@ gcloud compute networks vpc-access connectors create my-connector \
   --max-instances 10 \
   --machine-type e2-micro
 
-# Attach to service
-gcloud run deploy SERVICE --image IMAGE_URL \
+# Deploy with connector
+gcloud run deploy my-service \
+  --image IMAGE \
   --vpc-connector my-connector \
-  --vpc-egress private-ranges-only  # or all-traffic
+  --vpc-egress private-ranges-only   # or all-traffic
+
+# Disconnect
+gcloud run services update my-service --clear-vpc-connector
 ```
 
 ```yaml
@@ -786,202 +1092,60 @@ spec:
         run.googleapis.com/vpc-access-egress: private-ranges-only
 ```
 
-Egress options:
+Egress modes:
 - `private-ranges-only` (default) -- only RFC 1918/6598 traffic goes through VPC.
-- `all-traffic` -- all egress through VPC (requires NAT gateway for internet).
+- `all-traffic` -- all outbound traffic routes through the connector (requires NAT gateway for internet access).
+
+Notes:
+- Connector must be in the same region as the Cloud Run service.
+- Machine types: `f1-micro`, `e2-micro`, `e2-standard-4`. Use `e2-standard-4` for high-concurrency workloads.
+- Connector instances (min 2, max 10) incur charges even when idle.
+- **Alternative**: Direct VPC egress (no connector needed, newer approach).
 
 ---
 
-## 6. Scaling Behavior
+## 8. Secrets
 
-### Cold Starts
+Two methods to expose Secret Manager secrets to Cloud Run containers.
 
-A cold start occurs when a new instance must be created to handle a request. Sequence:
-1. Container image pulled (mitigated by image streaming).
-2. Container started.
-3. Startup probe checked (if configured).
-4. Request delivered.
+### As Environment Variables
 
-Mitigation strategies:
-- Set `--min 1` to keep warm instances.
-- Enable `--cpu-boost` for faster startup.
-- Use small container images (distroless/scratch).
-- Initialize expensive resources lazily with `sync.Once`.
-- Avoid crashing -- a crash queues traffic while replacement starts.
-
-### Request Buffering
-
-When all instances are at capacity:
-- New instances are started.
-- Requests queue for up to **3.5x average startup time** or **10 seconds** (whichever is greater).
-- If no instance becomes available, HTTP 429 is returned.
-
-### Concurrent Request Handling
-
-- Default concurrency: 80 requests per instance.
-- Cloud Run distributes requests evenly across instances.
-- Min instances receive traffic preferentially before autoscaled instances.
-- Max instances can be briefly exceeded during traffic spikes.
-
-### Instance Idle Timeout
-
-- Idle instances are kept for up to **15 minutes** before being shut down.
-- Min instances are never shut down due to idle timeout.
-
-### Connection Timeouts
-
-- VPC connections: 10 minutes idle timeout.
-- Internet connections: 20 minutes idle timeout.
-
----
-
-## 7. Deployment
-
-### gcloud Deploy
-
-```bash
-# From container image
-gcloud run deploy my-service \
-  --image us-docker.pkg.dev/PROJECT/REPO/IMAGE:TAG \
-  --region us-central1 \
-  --allow-unauthenticated
-
-# From source (auto-builds with Cloud Build or Buildpacks)
-gcloud run deploy my-service --source . --region us-central1
-
-# Deploy without sending traffic (for gradual rollout)
-gcloud run deploy my-service --image IMAGE_URL --no-traffic --tag canary
-```
-
-### Traffic Splitting
-
-```bash
-# Gradual rollout
-gcloud run services update-traffic my-service --to-revisions LATEST=10
-
-# Split between revisions
-gcloud run services update-traffic my-service \
-  --to-revisions my-service-v1=70,my-service-v2=30
-
-# Rollback to previous revision
-gcloud run services update-traffic my-service --to-revisions my-service-v1=100
-
-# Send all traffic to latest
-gcloud run services update-traffic my-service --to-latest
-```
-
-Tagged revisions get dedicated URLs: `https://canary---my-service-xxxxx.a.run.app`.
-
-### Cloud Build Integration
-
-```yaml
-# cloudbuild.yaml
-steps:
-  - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-t', 'LOCATION-docker.pkg.dev/PROJECT_ID/REPO/IMAGE:$COMMIT_SHA', '.']
-  - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', 'LOCATION-docker.pkg.dev/PROJECT_ID/REPO/IMAGE:$COMMIT_SHA']
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-    entrypoint: gcloud
-    args:
-      - 'run'
-      - 'deploy'
-      - 'my-service'
-      - '--image'
-      - 'LOCATION-docker.pkg.dev/PROJECT_ID/REPO/IMAGE:$COMMIT_SHA'
-      - '--region'
-      - 'us-central1'
-images:
-  - 'LOCATION-docker.pkg.dev/PROJECT_ID/REPO/IMAGE:$COMMIT_SHA'
-```
-
-Cloud Build SA requires: `roles/run.admin`, `roles/iam.serviceAccountUser`, `roles/artifactregistry.writer`.
-
-### Multi-Container (Sidecars)
-
-Up to 10 containers per instance. Only the ingress container exposes a port; sidecars communicate via localhost.
+Resolved at instance **startup**. Pin to a specific version for deterministic deployments.
 
 ```bash
 gcloud run deploy my-service \
-  --container ingress --image INGRESS_IMAGE --port 8080 \
-  --container sidecar --image SIDECAR_IMAGE
-```
-
-### Disable Deployment Health Check
-
-```bash
-gcloud run deploy my-service --image IMAGE_URL --no-deploy-health-check
-```
-
----
-
-## 8. Environment Variables & Secrets
-
-### Environment Variables
-
-```bash
-# Set
-gcloud run deploy SERVICE --image IMAGE_URL \
-  --set-env-vars KEY1=VALUE1,KEY2=VALUE2
-
-# Update (non-destructive)
-gcloud run services update SERVICE --update-env-vars KEY1=NEW_VALUE
-
-# Remove
-gcloud run services update SERVICE --remove-env-vars KEY1,KEY2
-
-# Clear all
-gcloud run services update SERVICE --clear-env-vars
-
-# From file
-gcloud run deploy SERVICE --image IMAGE_URL --env-vars-file=.env.yaml
+  --image IMAGE \
+  --update-secrets=DB_PASSWORD=db-password-secret:3
 ```
 
 ```yaml
-containers:
-- image: IMAGE
-  env:
-  - name: APP_ENV
-    value: production
-  - name: LOG_LEVEL
-    value: info
+spec:
+  template:
+    spec:
+      containers:
+      - image: IMAGE
+        env:
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: db-password-secret
+              key: "3"                 # pinned version number
 ```
 
-Reserved variables (cannot be set): `PORT`, `K_SERVICE`, `K_REVISION`, `K_CONFIGURATION`.
+Go usage:
 
-Invalid names: empty string, contains `=`, starts with `X_GOOGLE_`.
+```go
+dbPassword := os.Getenv("DB_PASSWORD")
+```
 
-Limits: max 32 KB per variable, up to 1000 variables.
+### As Volume Mounts
 
-### Secret Manager Integration
-
-Two methods:
-
-#### As Environment Variable
-
-Resolved at instance startup. Pin to a specific version (not `latest`).
+Mounted as files. Can auto-refresh when using `latest`.
 
 ```bash
-gcloud run deploy SERVICE --image IMAGE_URL \
-  --update-secrets=DB_PASSWORD=my-db-secret:3
-```
-
-```yaml
-env:
-- name: DB_PASSWORD
-  valueFrom:
-    secretKeyRef:
-      name: my-db-secret
-      key: "3"  # version number, or "latest"
-```
-
-#### As Volume Mount
-
-Fetched at access time (always gets latest value). Supports automatic rotation.
-
-```bash
-gcloud run deploy SERVICE --image IMAGE_URL \
-  --update-secrets=/secrets/db/password=my-db-secret:latest
+gcloud run deploy my-service \
+  --image IMAGE \
+  --update-secrets=/secrets/db-password=db-password-secret:latest
 ```
 
 ```yaml
@@ -991,72 +1155,376 @@ spec:
       containers:
       - image: IMAGE
         volumeMounts:
-        - mountPath: /secrets/db
-          name: db-secret
+        - name: db-password
+          mountPath: /secrets/db-password
+          readOnly: true
       volumes:
-      - name: db-secret
+      - name: db-password
         secret:
-          secretName: my-db-secret
+          secretName: db-password-secret
           items:
           - key: latest
-            path: password
+            path: value
 ```
 
-#### Cross-Project Secrets
+Go usage:
+
+```go
+secret, err := os.ReadFile("/secrets/db-password/value")
+if err != nil {
+    return fmt.Errorf("read secret: %w", err)
+}
+```
+
+### Latest vs Pinned Versions
+
+| Method | Recommended version | Why |
+|---|---|---|
+| Env var | Pinned numeric (`3`, `5`) | Resolved once at startup; `latest` may change between deploys |
+| Volume mount | `latest` | Re-read on each access; supports rotation without redeploy |
+
+### Multiple Secrets
 
 ```bash
-gcloud run deploy SERVICE --image IMAGE_URL \
+gcloud run deploy my-service \
+  --image IMAGE \
+  --update-secrets=DB_PASSWORD=db-password:3,API_KEY=api-key:latest
+```
+
+### Cross-Project Secrets
+
+```bash
+gcloud run deploy my-service \
+  --image IMAGE \
   --update-secrets=/secrets/key=projects/123456/secrets/shared-secret:latest
 ```
 
-#### Required IAM
+### Required IAM
 
 The runtime SA needs `roles/secretmanager.secretAccessor` on each secret:
 
 ```bash
-gcloud secrets add-iam-policy-binding my-db-secret \
+gcloud secrets add-iam-policy-binding db-password-secret \
   --member=serviceAccount:my-service-sa@PROJECT_ID.iam.gserviceaccount.com \
   --role=roles/secretmanager.secretAccessor
 ```
 
-#### Terraform
+### Limitations
+
+- Cannot mount at `/dev`, `/proc`, `/sys` or their subdirectories.
+- Multiple secrets cannot share the same mount path.
+- Mounting at a path hides existing directory contents.
+- Regional secrets not supported.
+
+---
+
+## 9. Deployment
+
+### gcloud run deploy
+
+```bash
+# From container image
+gcloud run deploy my-service \
+  --image us-docker.pkg.dev/PROJECT/REPO/IMAGE:TAG \
+  --region us-central1 \
+  --allow-unauthenticated
+
+# With full configuration
+gcloud run deploy my-service \
+  --image IMAGE \
+  --region us-central1 \
+  --cpu 2 --memory 1Gi \
+  --min 1 --max 50 \
+  --concurrency 100 \
+  --timeout 300s \
+  --service-account my-sa@PROJECT.iam.gserviceaccount.com \
+  --ingress internal \
+  --set-env-vars APP_ENV=production,LOG_LEVEL=info \
+  --update-secrets DB_PASS=db-pass:3 \
+  --cpu-boost \
+  --no-cpu-throttling
+```
+
+### Source Deploy
+
+Cloud Run uses Cloud Build + Buildpacks (or your Dockerfile if present) to build and push automatically. Creates an Artifact Registry repo named `cloud-run-source-deploy` if none exists.
+
+```bash
+# Auto-detect: uses Dockerfile if present, otherwise Buildpacks
+gcloud run deploy my-service --source . --region us-central1
+
+# Deploy without build (preview -- for pre-built artifacts)
+gcloud run deploy my-service --source . --no-build --base-image BASE_IMAGE
+```
+
+Required permissions for source deploy:
+- `roles/run.sourceDeveloper` (Cloud Run Source Developer)
+- `roles/serviceusage.serviceUsageConsumer`
+- `roles/iam.serviceAccountUser` on the Cloud Run service identity
+- Cloud Build SA needs `roles/run.builder`
+
+### Cloud Build Integration
+
+```yaml
+# cloudbuild.yaml
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'us-docker.pkg.dev/$PROJECT_ID/my-repo/my-service:$COMMIT_SHA', '.']
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'us-docker.pkg.dev/$PROJECT_ID/my-repo/my-service:$COMMIT_SHA']
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'my-service'
+      - '--image=us-docker.pkg.dev/$PROJECT_ID/my-repo/my-service:$COMMIT_SHA'
+      - '--region=us-central1'
+images:
+  - 'us-docker.pkg.dev/$PROJECT_ID/my-repo/my-service:$COMMIT_SHA'
+```
+
+Cloud Build SA requires: `roles/run.admin`, `roles/iam.serviceAccountUser`, `roles/artifactregistry.writer`.
+
+### Traffic Splitting
+
+```bash
+# Deploy without serving traffic (canary prep)
+gcloud run deploy my-service --image IMAGE --no-traffic
+
+# Send 10% to new revision
+gcloud run services update-traffic my-service --to-revisions LATEST=10
+
+# Split between specific revisions
+gcloud run services update-traffic my-service \
+  --to-revisions my-service-00005-abc=90,my-service-00006-def=10
+
+# Route all traffic to latest
+gcloud run services update-traffic my-service --to-latest
+```
+
+### Tagged Revisions (Preview URLs)
+
+```bash
+# Deploy with a tag (gets URL: https://canary---my-service-xxxxx-uc.a.run.app)
+gcloud run deploy my-service --image IMAGE --no-traffic --tag canary
+
+# Send traffic to tagged revision
+gcloud run services update-traffic my-service --to-tags canary=5
+
+# Remove tag
+gcloud run services update-traffic my-service --remove-tags canary
+```
+
+### Rollback
+
+```bash
+# List revisions
+gcloud run revisions list --service my-service
+
+# Roll back to a known-good revision
+gcloud run services update-traffic my-service \
+  --to-revisions my-service-00003-xyz=100
+```
+
+Cloud Run checks deployment health automatically: a new revision must pass its startup probe before receiving traffic. If the probe fails, the revision is marked unhealthy and traffic stays on the previous revision.
+
+### Disable Deployment Health Check
+
+```bash
+gcloud run deploy my-service --image IMAGE --no-deploy-health-check
+```
+
+---
+
+## 10. Environment Variables
+
+### Via gcloud
+
+```bash
+# Set on deploy (destructive -- replaces all existing vars)
+gcloud run deploy my-service --image IMAGE \
+  --set-env-vars KEY1=value1,KEY2=value2
+
+# Update without replacing all (non-destructive)
+gcloud run services update my-service \
+  --update-env-vars KEY3=value3
+
+# Remove specific vars
+gcloud run services update my-service \
+  --remove-env-vars KEY1,KEY2
+
+# Clear all
+gcloud run services update my-service --clear-env-vars
+
+# From file (.env or YAML format)
+gcloud run deploy my-service --image IMAGE \
+  --env-vars-file=.env.yaml
+```
+
+Escape commas in values with a custom delimiter:
+
+```bash
+gcloud run deploy my-service --image IMAGE \
+  --set-env-vars "^@^HOSTS=host1,host2,host3@DB=mydb"
+```
+
+### Via YAML (Revision Template)
+
+```yaml
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: my-service
+spec:
+  template:
+    metadata:
+      name: my-service-v2
+    spec:
+      containers:
+      - image: IMAGE
+        env:
+        - name: APP_ENV
+          value: production
+        - name: LOG_LEVEL
+          value: info
+```
+
+```bash
+gcloud run services replace service.yaml
+```
+
+Supported env file formats:
+
+```yaml
+# .env.yaml
+APP_ENV: production
+LOG_LEVEL: info
+```
+
+```
+# .env
+APP_ENV=production
+LOG_LEVEL=info
+```
+
+### Via Terraform
 
 ```hcl
 resource "google_cloud_run_v2_service" "default" {
-  template {
-    containers {
-      image = "IMAGE_URL"
+  name                = "my-service"
+  location            = "us-central1"
+  deletion_protection = false
+  ingress             = "INGRESS_TRAFFIC_ALL"
 
-      # As env var
+  template {
+    service_account = "my-sa@my-project.iam.gserviceaccount.com"
+
+    scaling {
+      min_instance_count = 1
+      max_instance_count = 10
+    }
+
+    containers {
+      image = "us-docker.pkg.dev/my-project/my-repo/my-service:latest"
+
+      resources {
+        limits = {
+          cpu    = "2"
+          memory = "1Gi"
+        }
+        cpu_idle          = false    # always-on CPU
+        startup_cpu_boost = true
+      }
+
+      env {
+        name  = "APP_ENV"
+        value = "production"
+      }
+
+      env {
+        name  = "LOG_LEVEL"
+        value = "info"
+      }
+
+      # Secret from Secret Manager
       env {
         name = "DB_PASSWORD"
         value_source {
           secret_key_ref {
-            secret  = google_secret_manager_secret.db.secret_id
-            version = "latest"
+            secret  = "db-password-secret"
+            version = "3"
           }
         }
       }
 
-      # As volume mount
-      volume_mounts {
-        name       = "db-secret"
-        mount_path = "/secrets/db"
+      ports {
+        container_port = 8080
       }
-    }
 
-    volumes {
-      name = "db-secret"
-      secret {
-        secret = google_secret_manager_secret.db.secret_id
+      startup_probe {
+        http_get {
+          path = "/healthz"
+          port = 8080
+        }
+        initial_delay_seconds = 0
+        timeout_seconds       = 1
+        period_seconds        = 10
+        failure_threshold     = 3
+      }
+
+      liveness_probe {
+        http_get {
+          path = "/healthz"
+          port = 8080
+        }
+        initial_delay_seconds = 0
+        timeout_seconds       = 1
+        period_seconds        = 10
+        failure_threshold     = 3
       }
     }
+  }
+
+  traffic {
+    percent = 100
+    type    = "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST"
   }
 }
 ```
 
-Limitations:
-- Cannot mount at `/dev`, `/proc`, `/sys`.
-- Mounting at a path hides existing directory contents.
-- Regional secrets not supported.
-- Multiple secrets cannot mount to the same path.
+### Limits
+
+- Max **1,000** environment variables per container.
+- Max **32 KB** per variable value.
+- Reserved (cannot be set): `PORT`, `K_SERVICE`, `K_REVISION`, `K_CONFIGURATION`.
+- Invalid names: empty string, contains `=`, starts with `X_GOOGLE_`.
+
+---
+
+## Sources
+
+- [Container Runtime Contract](https://docs.cloud.google.com/run/docs/container-contract)
+- [Configure Health Checks](https://docs.cloud.google.com/run/docs/configuring/healthchecks)
+- [About Concurrency](https://docs.cloud.google.com/run/docs/about-concurrency)
+- [Set Max Concurrent Requests](https://docs.cloud.google.com/run/docs/configuring/concurrency)
+- [About Instance Autoscaling](https://docs.cloud.google.com/run/docs/about-instance-autoscaling)
+- [Set Min Instances](https://docs.cloud.google.com/run/docs/configuring/min-instances)
+- [Set Max Instances](https://docs.cloud.google.com/run/docs/configuring/max-instances)
+- [Configure CPU](https://docs.cloud.google.com/run/docs/configuring/services/cpu)
+- [Pub/Sub Tutorial](https://docs.cloud.google.com/run/docs/tutorials/pubsub)
+- [Authenticate Push Subscriptions](https://docs.cloud.google.com/pubsub/docs/authenticate-push-subscriptions)
+- [Service-to-Service Auth](https://docs.cloud.google.com/run/docs/authenticating/service-to-service)
+- [Eventarc Cloud Storage](https://docs.cloud.google.com/run/docs/tutorials/eventarc)
+- [CloudEvents SDK for Go](https://github.com/cloudevents/sdk-go)
+- [Cloud Run IAM Roles](https://docs.cloud.google.com/run/docs/reference/iam/roles)
+- [Managing Access](https://docs.cloud.google.com/run/docs/securing/managing-access)
+- [Ingress Settings](https://docs.cloud.google.com/run/docs/securing/ingress)
+- [VPC Connectors](https://docs.cloud.google.com/run/docs/configuring/vpc-connectors)
+- [Configure Secrets](https://docs.cloud.google.com/run/docs/configuring/services/secrets)
+- [Environment Variables](https://docs.cloud.google.com/run/docs/configuring/services/environment-variables)
+- [Source Deploy](https://docs.cloud.google.com/run/docs/deploying-source-code)
+- [Rollouts and Rollbacks](https://docs.cloud.google.com/run/docs/rollouts-rollbacks-traffic-migration)
+- [Structured Logging](https://docs.cloud.google.com/logging/docs/structured-logging)
+- [Cloud Logging with slog](https://github.com/remko/cloudrun-slog)
+- [Terraform google_cloud_run_v2_service](https://registry.terraform.io/providers/hashicorp/google/latest/docs/resources/cloud_run_v2_service)
