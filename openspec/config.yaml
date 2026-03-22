@@ -1,0 +1,19 @@
+version: 1
+project_name: ProyectoAgentero
+stack:
+    language: go
+    framework: ""
+    build_tool: go
+    test_cmd: ""
+    lint_cmd: ""
+    format_cmd: ""
+    manifests:
+        - go.mod
+skills_path: ""
+commands:
+    build: go build ./...
+    test: go test ./...
+    lint: golangci-lint run ./...
+    format: gofumpt -w .
+capabilities:
+    memory_enabled: false
