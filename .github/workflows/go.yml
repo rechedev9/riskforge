@@ -1,12 +1,6 @@
 name: Go
 
 on:
-  pull_request:
-    paths:
-      - "**.go"
-      - "go.mod"
-      - "go.sum"
-      - ".github/workflows/go.yml"
   push:
     branches:
       - main
@@ -15,6 +9,9 @@ on:
       - "go.mod"
       - "go.sum"
       - ".github/workflows/go.yml"
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
 
 permissions:
   contents: read
