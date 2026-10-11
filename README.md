@@ -1,291 +1,119 @@
-<p align="center">
-  <img src="assets/banner.png" alt="RISKFORGE — Carrier Quote Gateway" width="720">
-</p>
+# riskforge 🔨: Parallel insurance quote gateway in Go, with Terraform for GCP
 
-<h1 align="center">riskforge</h1>
+[![CI](https://img.shields.io/github/actions/workflow/status/rechedev9/riskforge/go.yml?branch=main&style=flat-square&label=ci)](https://github.com/rechedev9/riskforge/actions/workflows/go.yml)
+[![Go](https://img.shields.io/github/go-mod/go-version/rechedev9/riskforge?style=flat-square)](go.mod)
 
-<p align="center">
-  <strong>Multi-carrier insurance quote aggregation engine with appetite-based pre-filtering.<br>Go backend + GCP infrastructure (Terraform) + OWASP-hardened security.</strong>
-</p>
+riskforge is a study project, not a production system. Luis Reche built it as a portfolio piece to learn the insurance domain: a quote gateway in Go that asks several carriers for a price in parallel, plus Terraform for Cloud Run, Spanner and Pub/Sub. The carriers are mock carriers with simulated latencies and random premiums, no real carrier is called, and it is not meant to take real traffic. The Terraform variable files hold placeholders, so the infrastructure is a template and not a running stack.
 
-<p align="center">
-  <img src="https://img.shields.io/badge/Go-1.25-00ADD8?style=for-the-badge&logo=go" alt="Go 1.25">
-  <img src="https://img.shields.io/badge/Terraform-1.5+-7B42BC?style=for-the-badge&logo=terraform" alt="Terraform 1.5+">
-  <img src="https://img.shields.io/badge/GCP-Cloud_Run_|_Spanner_|_Pub/Sub-4285F4?style=for-the-badge&logo=googlecloud" alt="GCP">
-  <img src="https://img.shields.io/badge/Security-OWASP_Hardened-EF3B2D?style=for-the-badge" alt="OWASP">
-</p>
-
-<p align="center">
-  <a href="#how-it-works">How It Works</a> ·
-  <a href="#quick-start">Quick Start</a> ·
-  <a href="#architecture">Architecture</a> ·
-  <a href="#api">API</a> ·
-  <a href="#infrastructure">Infrastructure</a> ·
-  <a href="#security">Security</a>
-</p>
-
----
-
-A carrier quote gateway that fans out quote requests to multiple insurance carriers in parallel, hedges slow responders adaptively, and returns sorted results through a single HTTP endpoint. Carriers are pre-filtered by appetite rules (state, line of business, premium range) stored in Spanner before any quote request is sent.
-
-```
-POST /quotes
-  → appetite pre-filter (Spanner)
-    → fan-out to eligible carriers (parallel)
-      → hedge slow carriers (adaptive EMA p95)
-        → deduplicate + sort by premium
-          → JSON response
-```
-
----
-
-## How It Works
-
-1. **Request arrives** at `POST /quotes` with coverage lines, state, and optional premium estimate
-2. **Appetite filter** checks Spanner for which carriers accept that risk profile
-3. **Fan-out** sends quote requests to all eligible carriers in parallel
-4. **Hedging** monitors carrier latency — if a carrier exceeds its p95 threshold, a hedge request fires to a faster carrier
-5. **Circuit breakers** trip after consecutive failures, excluding unreliable carriers
-6. **Rate limiters** enforce per-carrier token buckets to prevent overload
-7. **Results** are deduplicated, sorted by premium ascending, and cached in Spanner
-
----
-
-## Quick Start
-
-### Run locally (no dependencies)
-
-```bash
-API_KEYS="dev-key-for-local-testing-only-32chars" go run ./cmd/api/
-```
-
-```bash
-curl -s -H "Authorization: Bearer dev-key-for-local-testing-only-32chars" \
-  -d '{"request_id":"demo","coverage_lines":["auto","homeowners"],"timeout_ms":5000}' \
-  localhost:8080/quotes | jq
-```
-
-```json
+```console
+$ curl -s -H "Authorization: Bearer dev-key-for-local-testing-only-32chars" \
+    -d '{"request_id":"demo","coverage_lines":["auto","homeowners"],"timeout_ms":5000}' \
+    localhost:8080/quotes | jq
 {
   "request_id": "demo",
   "quotes": [
-    {"carrier_id": "alpha", "premium_cents": 89790, "currency": "USD", "latency_ms": 100},
-    {"carrier_id": "beta",  "premium_cents": 61813, "currency": "USD", "latency_ms": 210},
-    {"carrier_id": "gamma", "premium_cents": 72677, "currency": "USD", "latency_ms": 800}
+    { "carrier_id": "beta",  "premium_cents": 49470, "currency": "USD", "is_hedged": false, "latency_ms": 197 },
+    { "carrier_id": "alpha", "premium_cents": 75760, "currency": "USD", "is_hedged": false, "latency_ms": 107 },
+    { "carrier_id": "gamma", "premium_cents": 77366, "currency": "USD", "is_hedged": false, "latency_ms": 791 }
   ],
-  "duration_ms": 809
+  "duration_ms": 791
 }
 ```
 
-### Run with Spanner emulator (Docker)
+Premiums are random, so your numbers will differ. Quotes come back sorted by premium, cheapest first.
+
+## Quick start
+
+You need Go 1.25 or newer. No database is required in this mode.
 
 ```bash
-docker compose up --build
+git clone https://github.com/rechedev9/riskforge && cd riskforge
+API_KEYS="dev-key-for-local-testing-only-32chars" go run ./cmd/api
 ```
 
-This starts:
-- **Spanner emulator** on ports 9010/9020
-- **Schema init** (creates Carriers, AppetiteRules, Quotes tables)
-- **API server** on port 8080
+The server listens on port 8080 (`PORT` changes it). Send the request above from a second terminal.
 
-Seed demo data:
-```bash
-./scripts/seed-emulator  # 3 carriers, 10 appetite rules
-```
-
-### Build
+To run with the Spanner emulator, use Docker:
 
 ```bash
-make build    # binary at ./bin/api
-make test     # tests with race detector
-make check    # fmt + lint + vet + test
+make up    # docker compose up --build -d: emulator, schema init, API on :8080
+make down
 ```
 
----
+In Spanner mode quotes are cached by request id. With an empty `Carriers` table the API falls back to the mock carriers; `scripts/seed-emulator` data does not produce quotes yet, see [Status](#status).
 
-## Architecture
+## How a quote request fans out
 
-```
-cmd/api/main.go            → 14 lines, delegates to internal/cli
-internal/
-├── cli/                   → Server wiring, Spanner connection, signal handling
-├── domain/                → Carrier, Quote, AppetiteRule, Money, errors (zero deps)
-├── ports/                 → Interfaces: CarrierPort, OrchestratorPort, repositories
-├── adapter/               → Mock carriers, HTTP carrier, generic adapter registry
-│   └── spanner/           → QuoteRepo, CarrierRepo, AppetiteRepo (Spanner client)
-├── orchestrator/          → Fan-out, singleflight dedup, adaptive hedging (EMA p95)
-├── circuitbreaker/        → 3-state machine (Closed→Open→HalfOpen), atomic ops
-├── ratelimiter/           → Token bucket via x/time/rate
-├── handler/               → HTTP handler (POST /quotes, /healthz, /readyz, /metrics)
-├── middleware/             → API key auth, security headers, concurrency limiter, audit
-├── metrics/               → Prometheus recorder (gauges, histograms, counters)
-├── cleanup/               → Background expired quote cleanup ticker
-└── testutil/              → Test helpers (NoopRecorder)
-```
+1. The handler validates the body: at most 1 MiB, unknown fields rejected, `coverage_lines` from `auto`, `homeowners`, `umbrella`, `timeout_ms` from 100 to 30000 (default 5000).
+2. With Spanner configured, the orchestrator first looks for a cached result for the same client and `request_id`. Concurrent identical requests share one fan-out (singleflight).
+3. Carriers are selected by the coverage lines they declare. Carriers whose circuit breaker is open are skipped.
+4. Each carrier is called in its own goroutine, through a per-carrier token bucket and then a circuit breaker: 5 consecutive failures open it for 30 seconds, then one probe decides whether it closes.
+5. Hedging: every 5 ms a monitor compares each pending carrier with its moving average latency. Once a carrier has run longer than 1.5 times that average (and 10 observations exist), the same request goes to the other eligible carrier with the lowest average, if its rate limiter has a free token.
+6. When the timeout hits, the answers collected so far are returned, de-duplicated by carrier, sorted by premium, and saved to Spanner if configured.
 
-### Request flow
-
-```
-HTTP Request → AuditLog → SecurityHeaders → RequireAPIKey → LimitConcurrency
-  → Handler.handlePostQuotes
-    → validate request
-    → Orchestrator.GetQuotes
-      ├── cache lookup (Spanner, optional)
-      ├── singleflight dedup (same request_id)
-      └── fanOut
-          ├── filterEligibleCarriers (appetite + capabilities + circuit breaker)
-          ├── launch primary goroutines (errgroup)
-          │   └── RateLimiter → CircuitBreaker → AdapterFunc
-          ├── hedgeMonitor (5ms poll, fires when elapsed > p95 × multiplier)
-          ├── collect + deduplicate results
-          ├── sort by premium ascending
-          └── save to Spanner cache
-    → JSON response
-```
-
----
+Details and code pointers are in [docs/architecture.md](docs/architecture.md).
 
 ## API
 
-### POST /quotes
-
-```bash
-curl -H "Authorization: Bearer $API_KEY" \
-  -d '{
-    "request_id": "q-123",
-    "coverage_lines": ["auto", "homeowners"],
-    "timeout_ms": 5000
-  }' \
-  http://localhost:8080/quotes
-```
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `request_id` | string | yes | Unique ID (≤256 chars, ASCII printable) |
-| `coverage_lines` | string[] | yes | Lines of business to price |
-| `timeout_ms` | int | no | Max wait time (100-30000ms, default 5000) |
-
-**Response** (200):
-```json
-{
-  "request_id": "q-123",
-  "quotes": [
-    {
-      "carrier_id": "beta",
-      "premium_cents": 61813,
-      "currency": "USD",
-      "is_hedged": false,
-      "latency_ms": 210
-    }
-  ],
-  "duration_ms": 219
-}
-```
+| Endpoint | Auth | Purpose |
+|----------|------|---------|
+| `POST /quotes` | Bearer API key | Body: `request_id`, `coverage_lines`, optional `timeout_ms` |
+| `GET /healthz` | none | Returns `ok` |
+| `GET /readyz` | none | Returns `ok`; the database check is not wired in yet |
+| `GET /metrics` | none | Prometheus metrics: breaker state, latency, hedges, rate limit drops |
 
 | Status | Meaning |
 |--------|---------|
-| 200 | Quotes returned (sorted by premium) |
-| 400 | Invalid request |
-| 401 | Missing/invalid API key |
-| 422 | No eligible carriers |
-| 429 | Auth failure rate limit |
-| 504 | Timeout before any carrier responded |
-
-### Other endpoints
-
-| Endpoint | Method | Auth | Description |
-|----------|--------|------|-------------|
-| `/healthz` | GET | No | Always returns `ok` |
-| `/readyz` | GET | No | DB health check |
-| `/metrics` | GET | No | Prometheus metrics |
-
----
+| 200 | Quotes returned |
+| 400 | Invalid JSON or invalid fields |
+| 401 | Missing or wrong API key |
+| 422 | No eligible carrier, or none answered before the timeout |
+| 429 | Too many failed authentication attempts from one IP |
+| 500 | Unexpected error in the orchestrator |
+| 503 | More than 100 requests in flight |
 
 ## Infrastructure
 
-8 Terraform modules provision the full GCP stack:
+Eight modules under `terraform/modules`, wired by `terraform/environments/dev` and `prod`, plus a `terraform/bootstrap` root for the state bucket and GitHub Workload Identity.
 
-| Module | Resources |
-|--------|-----------|
-| **iam** | 3 SAs, project IAM, audit logging |
-| **networking** | VPC, subnet, VPC connector, 5 firewall rules, Cloud Armor |
-| **spanner** | Instance, database (Carriers + AppetiteRules + Quotes), IAM |
-| **cloud-run** | Generic module (API public + Worker internal) |
-| **pubsub** | Topic, DLQ, push subscription with OIDC |
-| **storage** | GCS bucket, Artifact Registry, IAM |
-| **monitoring** | API + Worker alerts (latency, errors, CPU), DLQ backlog, uptime |
-| **kms** | CMEK opt-in scaffold (disabled by default) |
+| Module | What it is for |
+|--------|----------------|
+| `iam` | Service accounts for API, worker and Pub/Sub push, audit logging |
+| `networking` | VPC, VPC connector, 5 firewall rules, Cloud Armor policy (not attached to a load balancer) |
+| `spanner` | Instance and database with the `Carriers`, `AppetiteRules` and `Quotes` tables |
+| `cloud-run` | Generic service module, used for the public API and the internal worker |
+| `pubsub` | Events topic, dead-letter topic, push subscription to the worker |
+| `storage` | Documents bucket and Artifact Registry repository |
+| `monitoring` | Uptime check, alert policies for latency, errors, CPU and DLQ backlog |
+| `kms` | Optional customer-managed key, off by default and unused by both environments |
 
-### Environments
+Environment sizes and the gaps between the Terraform and the Go code are in [docs/infrastructure.md](docs/infrastructure.md).
 
-| | Dev | Prod |
-|---|---|---|
-| Instances | 0-5 (scale-to-zero) | 2-20 |
-| Spanner | 100 PU | 300 PU |
-| Alerts | Disabled | Enabled |
-| Deletion protection | No | Yes |
-
----
-
-## Security
-
-OWASP-hardened infrastructure (15 findings fixed):
-
-- **Audit logging** — DATA_READ, DATA_WRITE, ADMIN_READ for all GCP services
-- **Firewall rules** — deny-all default + explicit allowlists (health checks, internal, GCP APIs)
-- **IAM scoping** — secretmanager.secretAccessor removed from project scope; per-secret bindings
-- **Terraform SA** — 11 explicit roles, no roles/editor
-- **CI/CD** — plan output masked in PR comments, continue-on-error removed
-- **State bucket** — public_access_prevention enforced
-- **Artifact Registry** — reader IAM scoped to runtime SAs, vulnerability scanning enabled
-- **Cloud Armor** — rate limiting policy (1000 req/min per IP)
-- **Provider pinning** — all modules pinned to ~> 6.14
-- **API auth** — constant-time key comparison, per-IP failure rate limiting with TTL eviction
-- **Security headers** — HSTS, X-Frame-Options, CSP, no-store cache
-
----
-
-## Development
-
-### Prerequisites
-
-- Go 1.25+
-- Docker (for Spanner emulator)
-- Terraform 1.5+ (for infrastructure)
-
-### Environment variables
-
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `API_KEYS` | yes | — | Comma-separated API keys (≥32 chars each) |
-| `PORT` | no | 8080 | HTTP server port |
-| `SPANNER_PROJECT` | no | — | GCP project (enables Spanner mode) |
-| `SPANNER_INSTANCE` | no | — | Spanner instance name |
-| `SPANNER_DATABASE` | no | — | Spanner database name |
-| `SPANNER_EMULATOR_HOST` | no | — | Emulator address (e.g., localhost:9010) |
-
-### Make targets
+## Tests and checks
 
 ```bash
-make build     # Build binary
-make test      # Run tests with race detector
-make vet       # Run go vet
-make check     # fmt + vet + test
-make docker    # Build Docker image
-make up        # docker compose up --build
-make down      # docker compose down
+make test              # go test -race -count=1 ./...
+make check             # go vet, then the tests
+make test-integration  # Spanner repositories against the emulator, needs Docker
 ```
 
----
+The suite has unit tests per package, an HTTP stack test, orchestrator chaos and randomized tests, a goroutine leak check (goleak), a fuzz test for `POST /quotes`, and an adversarial black-box suite in `internal/antirez`. `.github/workflows/go.yml` builds, vets and runs the tests with the race detector, then the emulator tests, on pushes to `main` that touch Go files, nightly, and on manual dispatch. There is no formatter or linter step.
 
-## Built With
+## Status
 
-- **[Go](https://go.dev/)** — API server, hexagonal architecture, zero web frameworks
-- **[Cloud Spanner](https://cloud.google.com/spanner)** — Carrier data, appetite rules, quote cache
-- **[Terraform](https://www.terraform.io/)** — 8 GCP infrastructure modules
-- **[Prometheus](https://prometheus.io/)** — Metrics (latency, errors, circuit breaker state)
-- **[GitHub Actions](https://github.com/features/actions)** — CI/CD with Workload Identity Federation
+| Area | State |
+|------|-------|
+| Fan-out, hedging, circuit breaker, rate limiter | Implemented and tested with mock carriers |
+| Appetite pre-filter | Tables, repository and seed data exist; the request path does not call them |
+| Real carriers | An HTTP carrier and a Delta example adapter exist; `cli.Run` wires only mock carriers |
+| Spanner mode | Quote cache works; carriers loaded from Spanner have no coverage lines, so requests return 422 |
+| Worker and Pub/Sub | Terraform only; there is no worker code and the API does not publish |
 
-## License
+## Documentation
 
-MIT
+- [docs/architecture.md](docs/architecture.md): packages, request flow, what is and is not wired
+- [docs/development.md](docs/development.md): prerequisites, environment variables, Make targets, emulator
+- [docs/infrastructure.md](docs/infrastructure.md): Terraform layout, environments, deploy workflow
+- [docs/security.md](docs/security.md): API and Terraform controls, open items
+- Reference notes: [Cloud Run](docs/cloud-run.md), [Cloud Spanner](docs/cloud-spanner.md), [Cloud Pub/Sub](docs/cloud-pubsub.md), [Terraform on GCP](docs/terraform-gcp.md), [OpenTelemetry for Go](docs/opentelemetry-go.md), [Anthropic Go SDK](docs/anthropic-go-sdk.md) (not used by the code)
+- Agent session templates: [docs/handoff.md](docs/handoff.md), [docs/pickup.md](docs/pickup.md)
