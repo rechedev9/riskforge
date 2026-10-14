@@ -40,7 +40,6 @@ type EMATracker struct {
 	metrics    ports.MetricsRecorder
 }
 
-// NewEMATracker returns an EMATracker seeded at 2×seed with warm-up enabled.
 // seed should be the carrier's TimeoutHint.
 func NewEMATracker(
 	carrierID string,
