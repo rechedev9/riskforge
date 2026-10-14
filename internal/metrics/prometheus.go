@@ -38,7 +38,7 @@ type PrometheusRecorder struct {
 	quoteLatencyHist   *prometheus.HistogramVec
 	fanOutDurationHist prometheus.Histogram
 	requestsTotal      *prometheus.CounterVec
-	hegesTotal        *prometheus.CounterVec
+	hedgesTotal        *prometheus.CounterVec
 	cbTransitionsTotal *prometheus.CounterVec
 	rateLimitTotal     *prometheus.CounterVec
 }
