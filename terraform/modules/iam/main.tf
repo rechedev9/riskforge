@@ -23,9 +23,6 @@ locals {
   # Only project-level roles that cannot be scoped to individual resources.
   # Resource-scoped IAM (spanner, storage, pubsub, run.invoker) is handled
   # by each respective module for least-privilege.
-  # H2: roles/secretmanager.secretAccessor is intentionally absent.
-  # Per-secret IAM bindings must be added via google_secret_manager_secret_iam_member
-  # co-located with each google_secret_manager_secret resource when secrets are defined.
   sa_project_roles = flatten([
     for sa_key, sa_email in {
       api    = google_service_account.cloud_run_api.email
@@ -51,8 +48,6 @@ resource "google_project_iam_member" "sa_roles" {
   member  = "serviceAccount:${each.value.email}"
 }
 
-# C3: Project-level audit logging for all GCP services.
-# Captures ADMIN_READ, DATA_READ, and DATA_WRITE across every API.
 resource "google_project_iam_audit_config" "all_services" {
   project = var.project_id
   service = "allServices"

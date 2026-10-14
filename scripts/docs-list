@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
 # Lists docs/ files with their YAML front-matter summaries.
-# Enforces that each .md file has `summary` and `read_when` fields.
 # Usage: docs-list [docs-directory]
 #
-# Drop this script into any project's scripts/ folder.
 # Agents run it first to know which docs to read for the current task.
 
 set -euo pipefail
@@ -26,7 +24,6 @@ for file in "$DOCS_DIR"/*.md; do
   [ -f "$file" ] || continue
   found=$((found + 1))
 
-  # Extract summary and read_when from YAML front-matter
   summary=""
   read_when=""
   in_frontmatter=false
