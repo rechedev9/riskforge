@@ -172,11 +172,6 @@ resource "google_monitoring_uptime_check_config" "api_health" {
   }
 }
 
-# -----------------------------------------------------------------------------
-# Worker Alert Policies (M4)
-# All resources are no-ops when var.worker_service_name == "".
-# -----------------------------------------------------------------------------
-
 resource "google_monitoring_alert_policy" "worker_latency" {
   count = var.enable_alerts && var.worker_service_name != "" ? 1 : 0
 
