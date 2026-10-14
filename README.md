@@ -105,7 +105,7 @@ The suite has unit tests per package, an HTTP stack test, orchestrator chaos and
 |------|-------|
 | Fan-out, hedging, circuit breaker, rate limiter | Implemented and tested with mock carriers |
 | Appetite pre-filter | Tables, repository and seed data exist; the request path does not call them |
-| Real carriers | An HTTP carrier and a Delta example adapter exist; `cli.Run` wires only mock carriers |
+| Real carriers | Spanner carriers with `BaseURL` are registered as HTTP adapters; without Spanner, `cli.Run` still uses the mock carriers |
 | Spanner mode | Quote cache works; carriers loaded from Spanner have no coverage lines, so requests return 422 |
 | Worker and Pub/Sub | Terraform only; there is no worker code and the API does not publish |
 
