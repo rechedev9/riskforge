@@ -1,30 +1,20 @@
 #!/usr/bin/env bash
 # Safe commit helper. Stages only listed paths; blocks "." and empty messages.
 # Usage: committer "type(scope): message" "file1" ["file2" ...]
-#
-# Examples:
-#   committer "feat(api): add rate limiting" apps/api/src/middleware/rate-limit.ts
-#   committer "fix(web): login redirect loop" apps/web/src/pages/login.tsx apps/web/src/hooks/use-auth.ts
-#   committer "test(shared): progression edge cases" packages/shared/src/generic-engine.test.ts
-#
-# Adapted from steipete/agent-scripts for Bun monorepo workflow.
 
 set -euo pipefail
 set -f  # disable glob expansion for bracket paths
 
-# Use real git binary directly — bypasses the git shim.
-# The shim blocks git add/commit for safety; committer is the authorized path.
 GIT_BIN="/usr/bin/git"
 
-# Generate a per-invocation token so the shim can verify this is committer
 _COMMITTER_TOKEN="$(head -c 32 /dev/urandom | base64)"
 export _COMMITTER_TOKEN
 
 usage() {
   printf 'Usage: %s [--force] "commit message" "file" ["file" ...]\n' "$(basename "$0")" >&2
   printf '\nExamples:\n' >&2
-  printf '  %s "feat(api): add endpoint" apps/api/src/routes/new.ts\n' "$(basename "$0")" >&2
-  printf '  %s "fix(web): button alignment" apps/web/src/components/Button.tsx\n' "$(basename "$0")" >&2
+  printf '  %s "feat(api): add endpoint" internal/cli/run.go\n' "$(basename "$0")" >&2
+  printf '  %s "fix(web): button alignment" internal/handler/http.go\n' "$(basename "$0")" >&2
   exit 2
 }
 
@@ -41,19 +31,16 @@ fi
 commit_message=$1
 shift
 
-# Guard: message must not be empty
 if [[ "$commit_message" != *[![:space:]]* ]]; then
   printf 'Error: commit message must not be empty\n' >&2
   exit 1
 fi
 
-# Guard: first arg looks like a file path
 if [ -e "$commit_message" ]; then
   printf 'Error: first argument looks like a file path ("%s"); provide the commit message first\n' "$commit_message" >&2
   exit 1
 fi
 
-# Validate conventional commit format (warn, don't block)
 if ! echo "$commit_message" | grep -qE '^(feat|fix|refactor|docs|test|chore|perf|build|ci|style)(\(.+\))?: .+'; then
   printf 'Warning: message does not follow Conventional Commits format\n' >&2
   printf '  Expected: type(scope): description\n' >&2
@@ -62,7 +49,6 @@ fi
 
 files=("$@")
 
-# Guard: block "." — defeats the safety purpose
 for file in "${files[@]}"; do
   if [ "$file" = "." ]; then
     printf 'Error: "." is not allowed; list specific paths instead\n' >&2
@@ -70,7 +56,6 @@ for file in "${files[@]}"; do
   fi
 done
 
-# Guard: verify all files exist (or are tracked deletions)
 for file in "${files[@]}"; do
   if [ ! -e "$file" ]; then
     if ! "$GIT_BIN" ls-files --error-unmatch -- "$file" >/dev/null 2>&1; then
@@ -82,7 +67,6 @@ for file in "${files[@]}"; do
   fi
 done
 
-# Reset staging area, add only our files
 "$GIT_BIN" restore --staged :/ 2>/dev/null || true
 "$GIT_BIN" add -A -- "${files[@]}"
 

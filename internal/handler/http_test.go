@@ -22,7 +22,6 @@ import (
 	"github.com/rechedev9/riskforge/internal/testutil"
 )
 
-// mockOrchestrator is a test double for ports.OrchestratorPort.
 type mockOrchestrator struct {
 	results []domain.QuoteResult
 	err     error
@@ -34,7 +33,6 @@ func (m *mockOrchestrator) GetQuotes(_ context.Context, _ domain.QuoteRequest) (
 
 var _ ports.OrchestratorPort = (*mockOrchestrator)(nil)
 
-// newHandler builds a Handler with a mock orchestrator and a discard logger.
 func newHandler(t *testing.T, orch ports.OrchestratorPort) *handler.Handler {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -49,7 +47,6 @@ func newHandler(t *testing.T, orch ports.OrchestratorPort) *handler.Handler {
 	})
 }
 
-// doRequest sends a POST /quotes request with the given body and returns the recorder.
 func doRequest(t *testing.T, h *handler.Handler, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	mux := http.NewServeMux()
@@ -62,7 +59,6 @@ func doRequest(t *testing.T, h *handler.Handler, body string) *httptest.Response
 	return w
 }
 
-// quoteResponseBody is the JSON structure returned by POST /quotes.
 type quoteResponseBody struct {
 	RequestID  string      `json:"request_id"`
 	Quotes     []quoteItem `json:"quotes"`
@@ -86,7 +82,6 @@ type errorBody struct {
 func TestHandler_PostQuotes_HappyPath(t *testing.T) {
 	t.Parallel()
 
-	// REQ-HTTP-001: valid POST /quotes returns 200 with expected JSON fields.
 	orch := &mockOrchestrator{
 		results: []domain.QuoteResult{
 			{
@@ -126,7 +121,6 @@ func TestHandler_PostQuotes_HappyPath(t *testing.T) {
 func TestHandler_PostQuotes_MalformedJSON_Returns400(t *testing.T) {
 	t.Parallel()
 
-	// REQ-HTTP-002: malformed JSON body → 400.
 	h := newHandler(t, &mockOrchestrator{})
 	w := doRequest(t, h, `{"request_id": INVALID`)
 
@@ -145,7 +139,6 @@ func TestHandler_PostQuotes_BodyTooLarge_Returns400(t *testing.T) {
 	t.Parallel()
 
 	// REQ-HTTP-002: body > 1 MB → 400 with REQUEST_TOO_LARGE.
-	// Build a body just over 1 MiB.
 	const oneMiB = 1 << 20
 	padding := bytes.Repeat([]byte("x"), oneMiB+100)
 	large := `{"request_id":"r","coverage_lines":["auto"],"extra":"` + string(padding) + `"}`
@@ -173,7 +166,6 @@ func TestHandler_PostQuotes_BodyTooLarge_Returns400(t *testing.T) {
 func TestHandler_PostQuotes_EmptyRequestID_Returns400(t *testing.T) {
 	t.Parallel()
 
-	// REQ-HTTP-003: empty request_id → 400 with INVALID_REQUEST.
 	h := newHandler(t, &mockOrchestrator{})
 	w := doRequest(t, h, `{"request_id":"","coverage_lines":["auto"]}`)
 
@@ -190,7 +182,6 @@ func TestHandler_PostQuotes_EmptyRequestID_Returns400(t *testing.T) {
 func TestHandler_PostQuotes_MissingCoverageLines_Returns400(t *testing.T) {
 	t.Parallel()
 
-	// REQ-HTTP-003: missing coverage_lines → 400.
 	h := newHandler(t, &mockOrchestrator{})
 	w := doRequest(t, h, `{"request_id":"req-002"}`)
 
@@ -202,7 +193,6 @@ func TestHandler_PostQuotes_MissingCoverageLines_Returns400(t *testing.T) {
 func TestHandler_PostQuotes_NegativeTimeoutMs_Returns400(t *testing.T) {
 	t.Parallel()
 
-	// REQ-HTTP-003: negative timeout_ms → 400.
 	h := newHandler(t, &mockOrchestrator{})
 	w := doRequest(t, h, `{"request_id":"req-003","coverage_lines":["auto"],"timeout_ms":-1}`)
 
@@ -214,8 +204,6 @@ func TestHandler_PostQuotes_NegativeTimeoutMs_Returns400(t *testing.T) {
 func TestHandler_PostQuotes_OrchestratorUnexpectedError_Returns500(t *testing.T) {
 	t.Parallel()
 
-	// REQ-HTTP-004: orchestrator returns unexpected error → 500 with INTERNAL_ERROR,
-	// no internal error details in response body.
 	orch := &mockOrchestrator{err: errors.New("redis connection refused")}
 	h := newHandler(t, orch)
 	w := doRequest(t, h, `{"request_id":"req-err","coverage_lines":["auto"]}`)
@@ -226,7 +214,6 @@ func TestHandler_PostQuotes_OrchestratorUnexpectedError_Returns500(t *testing.T)
 
 	var body errorBody
 	_ = json.NewDecoder(w.Body).Decode(&body)
-	// Must NOT contain internal error details.
 	if strings.Contains(body.Error, "redis") {
 		t.Fatalf("response body must not expose internal error details, got %q", body.Error)
 	}
@@ -235,8 +222,6 @@ func TestHandler_PostQuotes_OrchestratorUnexpectedError_Returns500(t *testing.T)
 func TestHandler_GetMetrics_Returns200WithPrometheusBody(t *testing.T) {
 	t.Parallel()
 
-	// REQ-HTTP-006: GET /metrics → 200 with Content-Type text/plain and
-	// body containing carrier_circuit_breaker_state.
 	h := newHandler(t, &mockOrchestrator{})
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
@@ -309,7 +294,6 @@ func TestHandler_PostQuotes_MalformedJSON_DoesNotLeakFieldNames(t *testing.T) {
 func TestHandler_PostQuotes_TableDriven_ValidationErrors(t *testing.T) {
 	t.Parallel()
 
-	// REQ-HTTP-003: table-driven validation scenarios.
 	tests := []struct {
 		name       string
 		body       string

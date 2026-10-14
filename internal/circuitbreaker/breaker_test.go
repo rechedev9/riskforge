@@ -14,8 +14,6 @@ import (
 
 var errFake = errors.New("fake carrier error")
 
-// newBreaker is a test helper that builds a Breaker with explicit thresholds
-// and returns the NoopRecorder for assertion.
 func newBreaker(t *testing.T, failThreshold, successThreshold int, openTimeout time.Duration) (*circuitbreaker.Breaker, *testutil.NoopRecorder) {
 	t.Helper()
 	rec := testutil.NewNoopRecorder()
@@ -44,7 +42,6 @@ func TestBreaker_ClosedToOpenOnFailureThreshold(t *testing.T) {
 		}
 	}
 
-	// Third failure should trip to Open.
 	err := b.Execute(ctx, fn)
 	if !errors.Is(err, errFake) {
 		t.Fatalf("expected errFake on trip, got %v", err)
@@ -62,12 +59,10 @@ func TestBreaker_SuccessResetsFailureCounter(t *testing.T) {
 	failFn := func() error { return errFake }
 	okFn := func() error { return nil }
 
-	// Two failures then a success — should remain Closed.
 	_ = b.Execute(ctx, failFn)
 	_ = b.Execute(ctx, failFn)
 	_ = b.Execute(ctx, okFn)
 
-	// A third failure after the reset should NOT trip.
 	_ = b.Execute(ctx, failFn)
 
 	if b.State() != ports.CBStateClosed {
@@ -78,7 +73,7 @@ func TestBreaker_SuccessResetsFailureCounter(t *testing.T) {
 func TestBreaker_OpenShortCircuits(t *testing.T) {
 	t.Parallel()
 
-	b, _ := newBreaker(t, 1, 1, time.Hour) // long timeout keeps it Open
+	b, _ := newBreaker(t, 1, 1, time.Hour)
 	ctx := t.Context()
 	callCount := 0
 	fn := func() error {
@@ -86,7 +81,6 @@ func TestBreaker_OpenShortCircuits(t *testing.T) {
 		return errFake
 	}
 
-	// Trip to Open.
 	_ = b.Execute(ctx, fn)
 	if b.State() != ports.CBStateOpen {
 		t.Fatal("expected Open")
@@ -117,19 +111,15 @@ func TestBreaker_OpenToHalfOpenAfterTimeout(t *testing.T) {
 	ctx := t.Context()
 	failFn := func() error { return errFake }
 
-	// Trip to Open.
 	_ = b.Execute(ctx, failFn)
 
-	// Wait for OpenTimeout to elapse.
 	time.Sleep(30 * time.Millisecond)
 
-	// Next Execute should transition to HalfOpen and attempt the probe.
 	okFn := func() error { return nil }
 	err := b.Execute(ctx, okFn)
 	if err != nil {
 		t.Fatalf("expected nil from probe, got %v", err)
 	}
-	// After one success with SuccessThreshold=1, circuit should be Closed.
 	if b.State() != ports.CBStateClosed {
 		t.Fatalf("expected Closed after successful probe, got %v", b.State())
 	}
@@ -141,18 +131,15 @@ func TestBreaker_HalfOpenToClosedOnSuccessThreshold(t *testing.T) {
 	b, _ := newBreaker(t, 1, 2, 20*time.Millisecond)
 	ctx := t.Context()
 
-	// Trip to Open.
 	_ = b.Execute(ctx, func() error { return errFake })
 	time.Sleep(30 * time.Millisecond)
 
-	// First probe — succeeds but SuccessThreshold=2, so stays HalfOpen.
 	_ = b.Execute(ctx, func() error { return nil })
 
 	if b.State() == ports.CBStateClosed {
 		t.Fatal("should still be HalfOpen after 1 success (threshold=2)")
 	}
 
-	// Second probe — closes.
 	err := b.Execute(ctx, func() error { return nil })
 	if err != nil {
 		t.Fatalf("expected nil on second probe, got %v", err)
@@ -168,11 +155,9 @@ func TestBreaker_HalfOpenToOpenOnProbeFailure(t *testing.T) {
 	b, _ := newBreaker(t, 1, 1, 20*time.Millisecond)
 	ctx := t.Context()
 
-	// Trip to Open.
 	_ = b.Execute(ctx, func() error { return errFake })
 	time.Sleep(30 * time.Millisecond)
 
-	// Probe fails — should re-open.
 	err := b.Execute(ctx, func() error { return errFake })
 	if !errors.Is(err, errFake) {
 		t.Fatalf("expected errFake from failed probe, got %v", err)
@@ -185,17 +170,12 @@ func TestBreaker_HalfOpenToOpenOnProbeFailure(t *testing.T) {
 func TestBreaker_HalfOpenConcurrentProbeEnforcement(t *testing.T) {
 	t.Parallel()
 
-	// Very long OpenTimeout — we'll manually advance to HalfOpen by letting
-	// a small timeout expire.
 	b, _ := newBreaker(t, 1, 1, 20*time.Millisecond)
 	ctx := t.Context()
 
-	// Trip to Open.
 	_ = b.Execute(ctx, func() error { return errFake })
 	time.Sleep(30 * time.Millisecond)
 
-	// Launch N goroutines that all try to Execute simultaneously.
-	// Exactly 1 should call fn; the rest should receive ErrCircuitOpen.
 	const N = 20
 	var (
 		mu        sync.Mutex
@@ -205,7 +185,6 @@ func TestBreaker_HalfOpenConcurrentProbeEnforcement(t *testing.T) {
 	started := make(chan struct{})
 	var wg sync.WaitGroup
 
-	// Slow probe function that blocks until released.
 	release := make(chan struct{})
 	wg.Add(N)
 	for i := 0; i < N; i++ {
@@ -249,7 +228,6 @@ func TestBreaker_PrometheusGaugeEmittedOnTransition(t *testing.T) {
 	initialSetCB := rec.SetCBStateCount.Load()
 	initialTransitions := rec.RecordCBTransitionCount.Load()
 
-	// Trip Closed → Open.
 	_ = b.Execute(ctx, func() error { return errFake })
 	if rec.SetCBStateCount.Load() <= initialSetCB {
 		t.Fatal("SetCBState not emitted on Closed→Open transition")
@@ -258,12 +236,11 @@ func TestBreaker_PrometheusGaugeEmittedOnTransition(t *testing.T) {
 		t.Fatal("RecordCBTransition not emitted on Closed→Open transition")
 	}
 
-	// Wait for Open → HalfOpen.
 	time.Sleep(30 * time.Millisecond)
 	beforeHO := rec.SetCBStateCount.Load()
 	beforeHOTrans := rec.RecordCBTransitionCount.Load()
 
-	_ = b.Execute(ctx, func() error { return nil }) // probe succeeds
+	_ = b.Execute(ctx, func() error { return nil })
 	if rec.SetCBStateCount.Load() <= beforeHO {
 		t.Fatal("SetCBState not emitted on Open→HalfOpen and HalfOpen→Closed transitions")
 	}

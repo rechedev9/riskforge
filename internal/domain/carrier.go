@@ -40,6 +40,11 @@ type CarrierConfig struct {
 	// Priority is used as a tiebreak when selecting a hedge candidate
 	// (lower value = preferred candidate).
 	Priority int
+	// BaseURL is the carrier quote API root. cli.Run registers an HTTP adapter
+	// when this is set on a carrier loaded from Spanner.
+	BaseURL string
+	// APIKey is sent as X-API-Key by the HTTP adapter.
+	APIKey string
 }
 
 // Carrier is the domain identity of a carrier integration.

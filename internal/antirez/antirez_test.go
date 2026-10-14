@@ -36,10 +36,6 @@ import (
 	"github.com/rechedev9/riskforge/internal/testutil"
 )
 
-// ---------------------------------------------------------------------------
-// 1. SETUP — Seeded PRNG helper
-// ---------------------------------------------------------------------------
-
 var testSeed = time.Now().UnixNano()
 
 func init() {
@@ -49,23 +45,16 @@ func init() {
 	fmt.Printf("antirez: seed=%d (replay: ANTIREZ_SEED=%d)\n", testSeed, testSeed)
 }
 
-// discardLogger returns a slog.Logger that silently discards all output.
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// validCoverageLines is the set of valid domain coverage lines.
 var validCoverageLines = []domain.CoverageLine{
 	domain.CoverageLineAuto,
 	domain.CoverageLineHomeowners,
 	domain.CoverageLineUmbrella,
 }
 
-// ---------------------------------------------------------------------------
-// Test helpers: build orchestrator and handler stacks from mock carriers
-// ---------------------------------------------------------------------------
-
-// carrierDef defines a mock carrier for test wiring.
 type carrierDef struct {
 	id           string
 	capabilities []domain.CoverageLine
@@ -185,7 +174,6 @@ func buildHandler(t testing.TB) (*httptest.Server, func()) {
 	return srv, cleanup
 }
 
-// postQuotes sends a POST /quotes request to the test server with auth.
 func postQuotes(srv *httptest.Server, body []byte) *http.Response {
 	req, _ := http.NewRequest("POST", srv.URL+"/quotes", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -196,10 +184,6 @@ func postQuotes(srv *httptest.Server, body []byte) *http.Response {
 	}
 	return resp
 }
-
-// ---------------------------------------------------------------------------
-// 2. BOUNDARY — EMATracker edge cases
-// ---------------------------------------------------------------------------
 
 func TestEMATracker_EdgeCases(t *testing.T) {
 	t.Parallel()
@@ -223,7 +207,6 @@ func TestEMATracker_EdgeCases(t *testing.T) {
 			EMAAlpha: 0.1, HedgeMultiplier: 1.5, EMAWarmupObservations: 0,
 		}, rec)
 
-		// Guard against panic from math.MaxInt64 duration
 		panicked := false
 		func() {
 			defer func() {
@@ -240,7 +223,6 @@ func TestEMATracker_EdgeCases(t *testing.T) {
 			if math.IsNaN(p95) {
 				t.Errorf("P95 after Record(MaxInt64) is NaN")
 			}
-			// Inf is acceptable for extreme values, NaN is not
 		}
 	})
 
@@ -263,7 +245,6 @@ func TestEMATracker_EdgeCases(t *testing.T) {
 
 		if !panicked {
 			p95 := tracker.P95()
-			// Negative p95 is a potential concern but not a crash
 			t.Logf("P95 after negative record: %f", p95)
 		}
 	})
@@ -274,13 +255,11 @@ func TestEMATracker_EdgeCases(t *testing.T) {
 			EMAAlpha: 0.1, HedgeMultiplier: 1.5, EMAWarmupObservations: 5,
 		}, rec)
 
-		// No observations yet => must return MaxFloat64
 		ht := tracker.HedgeThreshold()
 		if ht != math.MaxFloat64 {
 			t.Errorf("HedgeThreshold during warmup = %f, want math.MaxFloat64", ht)
 		}
 
-		// Record 4 observations (still in warmup, need 5)
 		for i := 0; i < 4; i++ {
 			tracker.Record(10 * time.Millisecond)
 		}
@@ -296,7 +275,6 @@ func TestEMATracker_EdgeCases(t *testing.T) {
 			EMAAlpha: 0.1, HedgeMultiplier: 1.5, EMAWarmupObservations: 3,
 		}, rec)
 
-		// Record exactly 3 observations to exit warmup
 		for i := 0; i < 3; i++ {
 			tracker.Record(100 * time.Millisecond)
 		}
@@ -307,7 +285,6 @@ func TestEMATracker_EdgeCases(t *testing.T) {
 		if ht <= 0 {
 			t.Errorf("HedgeThreshold after warmup should be positive, got %f", ht)
 		}
-		// Should be p95 * 1.5
 		p95 := tracker.P95()
 		expected := p95 * 1.5
 		if math.Abs(ht-expected) > 0.001 {
@@ -323,17 +300,12 @@ func TestEMATracker_EdgeCases(t *testing.T) {
 		}, rec)
 
 		p95 := tracker.P95()
-		// Should return seed*2 = 500ms * 2 = 1000ms
 		expectedSeedMs := float64(seed.Milliseconds()) * 2.0
 		if p95 != expectedSeedMs {
 			t.Errorf("P95 with zero observations = %f, want seed*2 = %f", p95, expectedSeedMs)
 		}
 	})
 }
-
-// ---------------------------------------------------------------------------
-// 3. BOUNDARY — CircuitBreaker edge cases
-// ---------------------------------------------------------------------------
 
 func TestCircuitBreaker_EdgeCases(t *testing.T) {
 	t.Parallel()
@@ -395,7 +367,6 @@ func TestCircuitBreaker_EdgeCases(t *testing.T) {
 
 		errBoom := fmt.Errorf("fail")
 
-		// threshold-1 failures: should stay Closed
 		for i := 0; i < threshold-1; i++ {
 			_ = cb.Execute(context.Background(), func() error { return errBoom })
 		}
@@ -403,7 +374,6 @@ func TestCircuitBreaker_EdgeCases(t *testing.T) {
 			t.Errorf("Expected Closed after %d failures, got %v", threshold-1, cb.State())
 		}
 
-		// One more failure: should trip to Open
 		_ = cb.Execute(context.Background(), func() error { return errBoom })
 		if cb.State() != ports.CBStateOpen {
 			t.Errorf("Expected Open after %d failures, got %v", threshold, cb.State())
@@ -428,19 +398,16 @@ func TestCircuitBreaker_EdgeCases(t *testing.T) {
 		cb := circuitbreaker.New("cb-st1", circuitbreaker.Config{
 			FailureThreshold: 1,
 			SuccessThreshold: 1,
-			OpenTimeout:      1 * time.Millisecond, // tiny timeout to transition quickly
+			OpenTimeout:      1 * time.Millisecond,
 		}, rec)
 
-		// Trip to Open
 		_ = cb.Execute(context.Background(), func() error { return fmt.Errorf("fail") })
 		if cb.State() != ports.CBStateOpen {
 			t.Fatalf("Expected Open, got %v", cb.State())
 		}
 
-		// Wait for OpenTimeout to elapse
 		time.Sleep(5 * time.Millisecond)
 
-		// Next call should probe HalfOpen -> Close on success
 		err := cb.Execute(context.Background(), func() error { return nil })
 		if err != nil {
 			t.Errorf("Probe call should succeed, got error: %v", err)
@@ -450,10 +417,6 @@ func TestCircuitBreaker_EdgeCases(t *testing.T) {
 		}
 	})
 }
-
-// ---------------------------------------------------------------------------
-// 4. BOUNDARY — Handler input validation
-// ---------------------------------------------------------------------------
 
 func TestHandler_InputValidation(t *testing.T) {
 	t.Parallel()
@@ -476,15 +439,12 @@ func TestHandler_InputValidation(t *testing.T) {
 	t.Run("body_exactly_1MB", func(t *testing.T) {
 		t.Parallel()
 		// Build a JSON body that is exactly at the 1MB limit.
-		// Use a large request_id padded to fill space.
 		padding := strings.Repeat("A", 200)
 		base := fmt.Sprintf(`{"request_id":"%s","coverage_lines":["auto"],"timeout_ms":5000}`, padding)
 		// Pad to near 1MB with whitespace (valid JSON allows trailing whitespace in the stream)
 		const oneMB = 1 << 20
 		if len(base) < oneMB {
-			// Create a body exactly at the limit by using a big request_id.
 			// Since request_id has a 256 char limit in validation, this will fail validation
-			// but should parse the JSON fine if body size is OK.
 			// Instead, let's just test slightly under 1MB with valid JSON.
 			validBody := fmt.Sprintf(`{"request_id":"at-limit-test","coverage_lines":["auto"],"timeout_ms":5000}`)
 			resp := postQuotes(srv, []byte(validBody))
@@ -492,7 +452,6 @@ func TestHandler_InputValidation(t *testing.T) {
 				t.Fatal("nil response")
 			}
 			defer resp.Body.Close()
-			// Should get 200 (valid request)
 			if resp.StatusCode != http.StatusOK {
 				body, _ := io.ReadAll(resp.Body)
 				t.Errorf("valid body: status=%d, want 200; body=%s", resp.StatusCode, body)
@@ -530,7 +489,6 @@ func TestHandler_InputValidation(t *testing.T) {
 			t.Fatal("nil response")
 		}
 		defer resp.Body.Close()
-		// 256 chars is exactly at the limit, should be accepted
 		if resp.StatusCode != http.StatusOK {
 			respBody, _ := io.ReadAll(resp.Body)
 			t.Errorf("request_id=256: status=%d, want 200; body=%s", resp.StatusCode, respBody)
@@ -691,7 +649,6 @@ func TestHandler_InputValidation(t *testing.T) {
 			t.Fatal("nil response")
 		}
 		defer resp.Body.Close()
-		// null decodes to zero-value struct => request_id empty => 400
 		if resp.StatusCode != http.StatusBadRequest {
 			t.Errorf("null JSON: status=%d, want 400", resp.StatusCode)
 		}
@@ -699,8 +656,6 @@ func TestHandler_InputValidation(t *testing.T) {
 
 	t.Run("utf8_multibyte_request_id", func(t *testing.T) {
 		t.Parallel()
-		// Multi-byte UTF-8 chars have codepoints > 0x7E so they should be rejected
-		// by the handler's ASCII printable check (0x20..0x7E).
 		body := `{"request_id":"cafe\u0301","coverage_lines":["auto"],"timeout_ms":5000}`
 		resp := postQuotes(srv, []byte(body))
 		if resp == nil {
@@ -726,10 +681,6 @@ func TestHandler_InputValidation(t *testing.T) {
 	})
 }
 
-// ---------------------------------------------------------------------------
-// 5. FUZZ LOOP — Random orchestrator inputs (1000 iterations)
-// ---------------------------------------------------------------------------
-
 func TestFuzzLoop_OrchestratorInputs(t *testing.T) {
 	t.Parallel()
 
@@ -746,18 +697,16 @@ func TestFuzzLoop_OrchestratorInputs(t *testing.T) {
 			t.Parallel()
 			localRng := rand.New(rand.NewSource(testSeed + int64(i)))
 
-			// Random request_id: 0-300 chars, ASCII + random bytes
 			idLen := localRng.Intn(301)
 			idBytes := make([]byte, idLen)
 			for j := range idBytes {
 				if localRng.Float64() < 0.8 {
-					idBytes[j] = byte(localRng.Intn(95) + 32) // printable ASCII
+					idBytes[j] = byte(localRng.Intn(95) + 32)
 				} else {
-					idBytes[j] = byte(localRng.Intn(256)) // random byte
+					idBytes[j] = byte(localRng.Intn(256))
 				}
 			}
 
-			// Random coverage lines: 0-5 lines
 			numLines := localRng.Intn(6)
 			lines := make([]domain.CoverageLine, numLines)
 			allLines := []domain.CoverageLine{"auto", "homeowners", "umbrella", "fire", "flood", ""}
@@ -774,7 +723,6 @@ func TestFuzzLoop_OrchestratorInputs(t *testing.T) {
 				}
 			}
 
-			// Random timeout: 0 to 60s
 			timeout := time.Duration(localRng.Int63n(60_000)) * time.Millisecond
 
 			req := domain.QuoteRequest{
@@ -796,7 +744,6 @@ func TestFuzzLoop_OrchestratorInputs(t *testing.T) {
 				defer cancel()
 
 				results, err := to.orch.GetQuotes(ctx, req)
-				// Either valid results or an error — both are acceptable
 				if err == nil && results == nil {
 					t.Errorf("GetQuotes returned nil results without error on iter %d", i)
 				}
@@ -809,14 +756,8 @@ func TestFuzzLoop_OrchestratorInputs(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// 6. ROUND-TRIP — Quote serialize/deserialize
-// ---------------------------------------------------------------------------
-
 func TestRoundTrip_QuoteSerializeDeserialize(t *testing.T) {
 	t.Parallel()
-	// The system uses domain structs internally with no custom marshaling.
-	// Verify that QuoteResult survives JSON round-trip (used by HTTP handler).
 	original := domain.QuoteResult{
 		RequestID:  "round-trip-test",
 		CarrierID:  "alpha",
@@ -848,10 +789,6 @@ func TestRoundTrip_QuoteSerializeDeserialize(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// 7. CORRUPTION — Mutated HTTP requests (500 iterations)
-// ---------------------------------------------------------------------------
-
 func TestCorruption_MutatedHTTPRequests(t *testing.T) {
 	t.Parallel()
 
@@ -876,23 +813,23 @@ func TestCorruption_MutatedHTTPRequests(t *testing.T) {
 
 			mutationType := localRng.Intn(5)
 			switch mutationType {
-			case 0: // Bit-flip random bytes
+			case 0:
 				numFlips := localRng.Intn(5) + 1
 				for j := 0; j < numFlips; j++ {
 					idx := localRng.Intn(len(mutated))
 					bit := byte(1 << uint(localRng.Intn(8)))
 					mutated[idx] ^= bit
 				}
-			case 1: // Truncate at random position
+			case 1:
 				cutAt := localRng.Intn(len(mutated))
 				mutated = mutated[:cutAt]
-			case 2: // Inject null bytes
+			case 2:
 				numNulls := localRng.Intn(5) + 1
 				for j := 0; j < numNulls; j++ {
 					idx := localRng.Intn(len(mutated))
 					mutated[idx] = 0
 				}
-			case 3: // Duplicate a random field
+			case 3:
 				extras := []string{
 					`,"request_id":"dup"`,
 					`,"coverage_lines":["auto"]`,
@@ -900,11 +837,10 @@ func TestCorruption_MutatedHTTPRequests(t *testing.T) {
 					`,"extra_field":"value"`,
 				}
 				extra := extras[localRng.Intn(len(extras))]
-				// Insert before closing brace
 				if idx := bytes.LastIndexByte(mutated, '}'); idx >= 0 {
 					mutated = append(mutated[:idx], append([]byte(extra), mutated[idx:]...)...)
 				}
-			case 4: // Add extra unknown keys
+			case 4:
 				extra := fmt.Sprintf(`,"unknown_%d":"%s"`, i, strings.Repeat("x", localRng.Intn(100)))
 				if idx := bytes.LastIndexByte(mutated, '}'); idx >= 0 {
 					mutated = append(mutated[:idx], append([]byte(extra), mutated[idx:]...)...)
@@ -913,11 +849,9 @@ func TestCorruption_MutatedHTTPRequests(t *testing.T) {
 
 			resp := postQuotes(srv, mutated)
 			if resp == nil {
-				// Network error is acceptable for corrupted input
 				return
 			}
 			defer resp.Body.Close()
-			// Drain body to avoid leaking connections
 			_, _ = io.ReadAll(resp.Body)
 
 			if resp.StatusCode < 100 || resp.StatusCode > 599 {
@@ -926,10 +860,6 @@ func TestCorruption_MutatedHTTPRequests(t *testing.T) {
 		})
 	}
 }
-
-// ---------------------------------------------------------------------------
-// 8. STRESS — Rapid create/destroy (1000 iterations)
-// ---------------------------------------------------------------------------
 
 func TestStress_RapidCreateDestroy(t *testing.T) {
 	t.Parallel()
@@ -991,7 +921,6 @@ func TestStress_RapidCreateDestroy(t *testing.T) {
 	t.Run("Orchestrator_GetQuotes", func(t *testing.T) {
 		t.Parallel()
 
-		// Reduce iterations for orchestrator — each creates goroutines
 		orchIterations := iterations / 10
 		if orchIterations < 10 {
 			orchIterations = 10
@@ -1007,17 +936,12 @@ func TestStress_RapidCreateDestroy(t *testing.T) {
 			})
 			cancel()
 			if err != nil {
-				// Errors are acceptable — we're looking for panics and leaks
 				continue
 			}
 			_ = results
 		}
 	})
 }
-
-// ---------------------------------------------------------------------------
-// 9. CONCURRENCY — Parallel attacks
-// ---------------------------------------------------------------------------
 
 func TestConcurrency_EMATracker_ParallelRecord(t *testing.T) {
 	t.Parallel()
@@ -1102,7 +1026,6 @@ func TestConcurrency_CircuitBreaker_ParallelExecute(t *testing.T) {
 
 	wg.Wait()
 
-	// Final state should be valid
 	state := cb.State()
 	if state != ports.CBStateClosed && state != ports.CBStateOpen && state != ports.CBStateHalfOpen {
 		t.Errorf("Invalid final CB state: %v", state)
@@ -1145,7 +1068,6 @@ func TestConcurrency_Orchestrator_SameRequestID(t *testing.T) {
 					Timeout:       2 * time.Second,
 				})
 				if err != nil {
-					// Errors (timeouts, etc.) are acceptable
 					return
 				}
 				if results == nil {
@@ -1168,7 +1090,6 @@ func TestConcurrency_LimitConcurrency_Handler(t *testing.T) {
 	t.Parallel()
 	log := discardLogger()
 
-	// Create a handler that blocks until released
 	release := make(chan struct{})
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		<-release
@@ -1208,14 +1129,12 @@ func TestConcurrency_LimitConcurrency_Handler(t *testing.T) {
 		}()
 	}
 
-	// Give goroutines time to hit the server, then release all blocked handlers
 	time.Sleep(100 * time.Millisecond)
 	close(release)
 
 	wg.Wait()
 
 	if got503 == 0 {
-		// With 100 goroutines and max=5, we expect some 503s
 		t.Log("NOTE: no 503s observed — possible if all requests were serialized")
 	}
 	t.Logf("LimitConcurrency: %d/%d requests got 503", got503, goroutines)
@@ -1251,8 +1170,6 @@ func TestConcurrency_AuthMiddleware_ManyIPs(t *testing.T) {
 			defer wg.Done()
 			for i := 0; i < ipsPerGoroutine; i++ {
 				req, _ := http.NewRequest("GET", srv.URL+"/test", nil)
-				// Unique remote addresses — the server won't see these directly
-				// since httptest uses localhost, but this tests the handler path.
 				req.Header.Set("Authorization", "Bearer invalid-key-"+strconv.Itoa(gid*1000+i))
 
 				resp, err := srv.Client().Do(req)
@@ -1262,7 +1179,6 @@ func TestConcurrency_AuthMiddleware_ManyIPs(t *testing.T) {
 				_, _ = io.ReadAll(resp.Body)
 				resp.Body.Close()
 
-				// All should get 401 (invalid key)
 				if resp.StatusCode != http.StatusUnauthorized && resp.StatusCode != http.StatusTooManyRequests {
 					t.Errorf("Unexpected status %d for invalid key from goroutine %d", resp.StatusCode, gid)
 				}
@@ -1273,11 +1189,6 @@ func TestConcurrency_AuthMiddleware_ManyIPs(t *testing.T) {
 	wg.Wait()
 }
 
-// ---------------------------------------------------------------------------
-// init check: ensure the test file compiles with all imports used
-// ---------------------------------------------------------------------------
-
-// Compile-time assertions to suppress "imported and not used" errors.
 var (
 	_ = testSeed
 	_ = discardLogger

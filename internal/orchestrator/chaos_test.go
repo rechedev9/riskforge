@@ -15,9 +15,6 @@ import (
 	"github.com/rechedev9/riskforge/internal/testutil"
 )
 
-// --- helpers -----------------------------------------------------------------
-
-// chaosFixture builds an orchestratorFixture with custom MockConfig per carrier.
 func chaosFixture(t *testing.T, specs []chaosCarrierSpec) *orchestratorFixture {
 	t.Helper()
 	carriers := make([]domain.Carrier, len(specs))
@@ -56,10 +53,6 @@ type chaosCarrierSpec struct {
 	mockCfg adapter.MockConfig
 }
 
-// --- chaos tests -------------------------------------------------------------
-
-// TestChaos_AllCarriersFail: all 3 carriers return errors simultaneously.
-// Orchestrator must not panic, returns empty results.
 func TestChaos_AllCarriersFail(t *testing.T) {
 	t.Parallel()
 
@@ -71,7 +64,7 @@ func TestChaos_AllCarriersFail(t *testing.T) {
 			mockCfg: adapter.MockConfig{
 				BaseLatency: 5 * time.Millisecond,
 				JitterMs:    0,
-				FailureRate: 1.0, // always fail
+				FailureRate: 1.0,
 			},
 		}
 	}
@@ -94,8 +87,6 @@ func TestChaos_AllCarriersFail(t *testing.T) {
 	}
 }
 
-// TestChaos_CarriersTimeout: all carriers take longer than the request timeout.
-// Must return partial or empty results without hanging.
 func TestChaos_CarriersTimeout(t *testing.T) {
 	t.Parallel()
 
@@ -105,7 +96,7 @@ func TestChaos_CarriersTimeout(t *testing.T) {
 		specs[i] = chaosCarrierSpec{
 			carrier: makeCarrier(id, []domain.CoverageLine{domain.CoverageLineAuto}, defaultCfg()),
 			mockCfg: adapter.MockConfig{
-				BaseLatency: 5 * time.Second, // well over the request timeout
+				BaseLatency: 5 * time.Second,
 				JitterMs:    0,
 				FailureRate: 0.0,
 			},
@@ -128,26 +119,21 @@ func TestChaos_CarriersTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
-	// All carriers timed out; expect empty results.
 	if len(results) != 0 {
 		t.Fatalf("expected 0 results when all carriers time out, got %d", len(results))
 	}
-	// Must not hang — should return within a reasonable margin of the timeout.
 	if elapsed > 2*time.Second {
 		t.Fatalf("GetQuotes hung: elapsed %v, want <2s", elapsed)
 	}
 }
 
-// TestChaos_RapidCBTransitions: 50 goroutines rapidly alternate success/failure
-// on a shared orchestrator. Circuit breakers must not race.
 func TestChaos_RapidCBTransitions(t *testing.T) {
 	t.Parallel()
 
-	// Single carrier with a very low failure threshold so the CB toggles rapidly.
 	cfg := defaultCfg()
 	cfg.FailureThreshold = 2
 	cfg.SuccessThreshold = 1
-	cfg.OpenTimeout = 50 * time.Millisecond // fast recovery to HalfOpen
+	cfg.OpenTimeout = 50 * time.Millisecond
 
 	specs := []chaosCarrierSpec{
 		{
@@ -155,7 +141,7 @@ func TestChaos_RapidCBTransitions(t *testing.T) {
 			mockCfg: adapter.MockConfig{
 				BaseLatency: 1 * time.Millisecond,
 				JitterMs:    0,
-				FailureRate: 0.5, // 50% failure to create CB oscillation
+				FailureRate: 0.5,
 			},
 		},
 	}
@@ -185,8 +171,6 @@ func TestChaos_RapidCBTransitions(t *testing.T) {
 	// If we get here without a race detector failure or panic, the test passes.
 }
 
-// TestChaos_ConcurrentMixedRequests: 100 goroutines send requests with different
-// coverage lines — some valid, some that match no carrier. No panics, no races.
 func TestChaos_ConcurrentMixedRequests(t *testing.T) {
 	t.Parallel()
 
@@ -208,7 +192,6 @@ func TestChaos_ConcurrentMixedRequests(t *testing.T) {
 	fix := chaosFixture(t, specs)
 	orch := fix.build(t)
 
-	// Mix of valid and non-matching coverage lines.
 	coverageSets := [][]domain.CoverageLine{
 		{domain.CoverageLineAuto},
 		{domain.CoverageLineHomeowners},
@@ -237,7 +220,6 @@ func TestChaos_ConcurrentMixedRequests(t *testing.T) {
 				t.Errorf("goroutine %d: unexpected error: %v", i, err)
 				return
 			}
-			// Results must have no duplicate carrier IDs.
 			seen := make(map[string]bool, len(results))
 			for _, r := range results {
 				if seen[r.CarrierID] {
@@ -250,12 +232,9 @@ func TestChaos_ConcurrentMixedRequests(t *testing.T) {
 	wg.Wait()
 }
 
-// TestChaos_ContextCancelDuringFanOut: 20 goroutines cancel context mid-fan-out.
-// Must not leak goroutines or panic.
 func TestChaos_ContextCancelDuringFanOut(t *testing.T) {
 	t.Parallel()
 
-	// Use moderately slow carriers so cancellation happens mid-flight.
 	specs := []chaosCarrierSpec{
 		{
 			carrier: makeCarrier("mid-a", []domain.CoverageLine{domain.CoverageLineAuto}, defaultCfg()),
@@ -282,7 +261,6 @@ func TestChaos_ContextCancelDuringFanOut(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			ctx, cancel := context.WithCancel(t.Context())
-			// Cancel after a short random-ish delay (10-50ms) while carriers are still working.
 			go func() {
 				time.Sleep(time.Duration(10+i*2) * time.Millisecond)
 				cancel()
@@ -293,7 +271,6 @@ func TestChaos_ContextCancelDuringFanOut(t *testing.T) {
 				CoverageLines: []domain.CoverageLine{domain.CoverageLineAuto},
 				Timeout:       500 * time.Millisecond,
 			}
-			// We don't care about the result — just that it doesn't panic.
 			_, _ = orch.GetQuotes(ctx, req)
 		}(i)
 	}

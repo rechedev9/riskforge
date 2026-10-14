@@ -19,8 +19,6 @@ import (
 	"github.com/rechedev9/riskforge/internal/testutil"
 )
 
-// parseSeed returns a deterministic seed from RANDOM_SEED env var, or a
-// time-based seed for exploratory runs.
 func parseSeed(t *testing.T) uint64 {
 	t.Helper()
 	if s := os.Getenv("RANDOM_SEED"); s != "" {
@@ -33,14 +31,12 @@ func parseSeed(t *testing.T) uint64 {
 	return uint64(time.Now().UnixNano())
 }
 
-// allCoverages is the universe of valid coverage lines.
 var allCoverages = []domain.CoverageLine{
 	domain.CoverageLineAuto,
 	domain.CoverageLineHomeowners,
 	domain.CoverageLineUmbrella,
 }
 
-// randomCoverages picks 1-3 random coverage lines from the universe.
 func randomCoverages(rng *rand.Rand) []domain.CoverageLine {
 	n := rng.IntN(3) + 1
 	perm := rng.Perm(len(allCoverages))
@@ -51,7 +47,6 @@ func randomCoverages(rng *rand.Rand) []domain.CoverageLine {
 	return out
 }
 
-// randomCarriers generates 1-6 carriers with random configs.
 func randomCarriers(rng *rand.Rand) []domain.Carrier {
 	n := rng.IntN(6) + 1
 	carriers := make([]domain.Carrier, n)
@@ -62,16 +57,16 @@ func randomCarriers(rng *rand.Rand) []domain.Carrier {
 			Name:         id,
 			Capabilities: randomCoverages(rng),
 			Config: domain.CarrierConfig{
-				TimeoutHint:           time.Duration(rng.IntN(491)+10) * time.Millisecond, // 10-500ms
+				TimeoutHint:           time.Duration(rng.IntN(491)+10) * time.Millisecond,
 				OpenTimeout:           30 * time.Second,
 				FailureThreshold:      rng.IntN(10) + 1,
 				SuccessThreshold:      rng.IntN(5) + 1,
-				HedgeMultiplier:       1.0 + rng.Float64()*2.0, // 1.0-3.0
-				EMAAlpha:              0.05 + rng.Float64()*0.3, // 0.05-0.35
+				HedgeMultiplier:       1.0 + rng.Float64()*2.0,
+				EMAAlpha:              0.05 + rng.Float64()*0.3,
 				EMAWarmupObservations: rng.IntN(20),
 				RateLimit: domain.RateLimitConfig{
-					TokensPerSecond: 50 + rng.Float64()*200, // 50-250
-					Burst:           rng.IntN(50) + 10,       // 10-59
+					TokensPerSecond: 50 + rng.Float64()*200,
+					Burst:           rng.IntN(50) + 10,
 				},
 				Priority: i + 1,
 			},
@@ -80,8 +75,6 @@ func randomCarriers(rng *rand.Rand) []domain.Carrier {
 	return carriers
 }
 
-// buildRandomOrch creates a fully wired orchestrator from random carriers.
-// If tripCB >= 0, trips that carrier's circuit breaker to Open.
 func buildRandomOrch(t *testing.T, rng *rand.Rand, carriers []domain.Carrier, tripCB int) *orchestrator.Orchestrator {
 	t.Helper()
 	registry := adapter.NewRegistry()
@@ -94,7 +87,7 @@ func buildRandomOrch(t *testing.T, rng *rand.Rand, carriers []domain.Carrier, tr
 		mc := adapter.NewMockCarrier(c.ID, adapter.MockConfig{
 			BaseLatency: time.Duration(rng.IntN(100)+1) * time.Millisecond,
 			JitterMs:    rng.IntN(21),
-			FailureRate: rng.Float64() * 0.5, // 0-50%
+			FailureRate: rng.Float64() * 0.5,
 		}, discardLog)
 		registry.Register(c.ID, adapter.RegisterMockCarrier(mc))
 
@@ -104,7 +97,6 @@ func buildRandomOrch(t *testing.T, rng *rand.Rand, carriers []domain.Carrier, tr
 			OpenTimeout:      c.Config.OpenTimeout,
 		}, noop)
 		if i == tripCB {
-			// Force Open by executing failing functions up to threshold.
 			failFn := func() error { return errors.New("forced failure") }
 			for range c.Config.FailureThreshold {
 				_ = cb.Execute(t.Context(), failFn)
@@ -128,11 +120,9 @@ func buildRandomOrch(t *testing.T, rng *rand.Rand, carriers []domain.Carrier, tr
 	})
 }
 
-// checkInvariants verifies the core orchestrator contract on a result set.
 func checkInvariants(t *testing.T, results []domain.QuoteResult, pool map[string]bool, eligible int, label string) {
 	t.Helper()
 
-	// No duplicate carrier IDs.
 	seen := make(map[string]bool, len(results))
 	for _, r := range results {
 		if seen[r.CarrierID] {
@@ -141,7 +131,6 @@ func checkInvariants(t *testing.T, results []domain.QuoteResult, pool map[string
 		seen[r.CarrierID] = true
 	}
 
-	// Sorted by premium ascending.
 	for i := 1; i < len(results); i++ {
 		if results[i].Premium.Amount < results[i-1].Premium.Amount {
 			t.Fatalf("%s: results not sorted at index %d: %d > %d",
@@ -149,7 +138,6 @@ func checkInvariants(t *testing.T, results []domain.QuoteResult, pool map[string
 		}
 	}
 
-	// Result count <= eligible carriers.
 	if len(results) > eligible {
 		t.Fatalf("%s: got %d results but only %d eligible carriers", label, len(results), eligible)
 	}
@@ -183,13 +171,11 @@ func TestOrchestrator_Random(t *testing.T) {
 	for i := range iterations {
 		carriers := randomCarriers(rng)
 
-		// Build carrier pool set.
 		pool := make(map[string]bool, len(carriers))
 		for _, c := range carriers {
 			pool[c.ID] = true
 		}
 
-		// ~20% chance of tripping a random carrier's CB.
 		tripCB := -1
 		if rng.Float64() < 0.2 {
 			tripCB = rng.IntN(len(carriers))
@@ -197,9 +183,8 @@ func TestOrchestrator_Random(t *testing.T) {
 
 		orch := buildRandomOrch(t, rng, carriers, tripCB)
 
-		// Random request.
 		reqLines := randomCoverages(rng)
-		timeout := time.Duration(rng.IntN(1800)+200) * time.Millisecond // 200ms-2s
+		timeout := time.Duration(rng.IntN(1800)+200) * time.Millisecond
 
 		req := domain.QuoteRequest{
 			RequestID:     fmt.Sprintf("rand-%d", i),
@@ -207,12 +192,10 @@ func TestOrchestrator_Random(t *testing.T) {
 			Timeout:       timeout,
 		}
 
-		// Count eligible: carrier must have at least one matching capability
-		// and not have an open CB.
 		eligible := 0
 		for ci, c := range carriers {
 			if ci == tripCB {
-				continue // CB is open
+				continue
 			}
 			for _, cap := range c.Capabilities {
 				for _, rl := range reqLines {
@@ -265,7 +248,6 @@ func TestOrchestrator_Random_Concurrent(t *testing.T) {
 		reqLines := randomCoverages(rng)
 		timeout := time.Duration(rng.IntN(1800)+200) * time.Millisecond
 
-		// Count eligible (same logic as single-threaded test).
 		eligible := 0
 		for ci, c := range carriers {
 			if ci == tripCB {
@@ -305,5 +287,4 @@ func TestOrchestrator_Random_Concurrent(t *testing.T) {
 	}
 }
 
-// countOpenCBs is a compile-time check that ports.CBStateOpen is accessible.
 var _ = ports.CBStateOpen

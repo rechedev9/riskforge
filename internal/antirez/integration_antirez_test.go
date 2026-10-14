@@ -38,12 +38,6 @@ const (
 	testAPIKey     = "test-key-abc"
 )
 
-// ---------------------------------------------------------------------------
-// 1. SETUP
-// ---------------------------------------------------------------------------
-
-// seededRand returns a *rand.Rand with a printed seed. On failure the seed is
-// available in test output for reproduction.
 func seededRand(t *testing.T) *rand.Rand {
 	t.Helper()
 	seed := time.Now().UnixNano()
@@ -51,9 +45,6 @@ func seededRand(t *testing.T) *rand.Rand {
 	return rand.New(rand.NewSource(seed))
 }
 
-// newAntirezStack wires the full production middleware chain with two mock
-// carriers (alpha, beta) with 10ms latency and 0% failure. Returns the
-// httptest.Server and the valid API key. The caller controls concurrencyLimit.
 func newAntirezStack(t *testing.T, concurrencyLimit int) (*httptest.Server, string) {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -127,13 +118,10 @@ func newAntirezStack(t *testing.T, concurrencyLimit int) (*httptest.Server, stri
 	return ts, testAPIKey
 }
 
-// validBody returns a valid JSON body for POST /quotes.
 func validBody(id string) string {
 	return `{"request_id":"` + id + `","coverage_lines":["auto"],"timeout_ms":5000}`
 }
 
-// doPost sends a POST /quotes with the given body and auth key, returns status
-// code and raw body. It always drains and closes the response body.
 func doPost(t *testing.T, url, key, body string) (int, []byte) {
 	t.Helper()
 	req, err := http.NewRequest(http.MethodPost, url+"/quotes", strings.NewReader(body))
@@ -152,7 +140,6 @@ func doPost(t *testing.T, url, key, body string) (int, []byte) {
 	return resp.StatusCode, b
 }
 
-// doPostRaw sends raw bytes as POST /quotes body.
 func doPostRaw(t *testing.T, url, key string, body []byte) (int, []byte) {
 	t.Helper()
 	req, err := http.NewRequest(http.MethodPost, url+"/quotes", bytes.NewReader(body))
@@ -171,10 +158,6 @@ func doPostRaw(t *testing.T, url, key string, body []byte) (int, []byte) {
 	return resp.StatusCode, b
 }
 
-// ---------------------------------------------------------------------------
-// 2. BOUNDARY — TestBoundary_RequestID_CharRange
-// ---------------------------------------------------------------------------
-
 func TestBoundary_RequestID_CharRange(t *testing.T) {
 	t.Parallel()
 	ts, key := newAntirezStack(t, 100)
@@ -183,10 +166,7 @@ func TestBoundary_RequestID_CharRange(t *testing.T) {
 		b := b
 		t.Run(fmt.Sprintf("char-0x%02X", b), func(t *testing.T) {
 			t.Parallel()
-			// Build request_id with a single byte.
 			id := string([]byte{byte(b)})
-			// Escape for JSON: we must produce valid JSON, so use json marshalling
-			// for the id value to handle control chars and quotes.
 			idJSON, _ := jsonMarshalString(id)
 			body := `{"request_id":` + idJSON + `,"coverage_lines":["auto"],"timeout_ms":5000}`
 
@@ -205,7 +185,6 @@ func TestBoundary_RequestID_CharRange(t *testing.T) {
 	}
 }
 
-// jsonMarshalString returns a JSON-encoded string value (with quotes).
 func jsonMarshalString(s string) (string, error) {
 	var buf bytes.Buffer
 	enc := newJSONStringEncoder(&buf)
@@ -213,8 +192,6 @@ func jsonMarshalString(s string) (string, error) {
 	return buf.String(), nil
 }
 
-// newJSONStringEncoder produces a minimal JSON string encoder that always
-// escapes non-ASCII and control characters so the resulting JSON is valid.
 type jsonStringEncoder struct {
 	buf *bytes.Buffer
 }
@@ -241,18 +218,14 @@ func (e *jsonStringEncoder) writeString(s string) {
 	e.buf.WriteByte('"')
 }
 
-// ---------------------------------------------------------------------------
-// 3. BOUNDARY — TestBoundary_RequestID_Length
-// ---------------------------------------------------------------------------
-
 func TestBoundary_RequestID_Length(t *testing.T) {
 	t.Parallel()
 	ts, key := newAntirezStack(t, 100)
 
 	cases := []struct {
-		name   string
-		len    int
-		want   int
+		name string
+		len  int
+		want int
 	}{
 		{"empty", 0, 400},
 		{"one_byte", 1, 200},
@@ -275,10 +248,6 @@ func TestBoundary_RequestID_Length(t *testing.T) {
 		})
 	}
 }
-
-// ---------------------------------------------------------------------------
-// 4. BOUNDARY — TestBoundary_TimeoutMs
-// ---------------------------------------------------------------------------
 
 func TestBoundary_TimeoutMs(t *testing.T) {
 	t.Parallel()
@@ -308,19 +277,14 @@ func TestBoundary_TimeoutMs(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// 5. BOUNDARY — TestBoundary_BodySize
-// ---------------------------------------------------------------------------
-
 func TestBoundary_BodySize(t *testing.T) {
 	t.Parallel()
 	ts, key := newAntirezStack(t, 100)
 
-	const maxBodyBytes = 1 << 20 // 1 MiB
+	const maxBodyBytes = 1 << 20
 
 	t.Run("at_limit", func(t *testing.T) {
 		t.Parallel()
-		// Build a valid JSON body with padding to reach exactly maxBodyBytes.
 		prefix := `{"request_id":"size","coverage_lines":["auto"],"timeout_ms":5000,"_pad":"`
 		suffix := `"}`
 		padLen := maxBodyBytes - len(prefix) - len(suffix)
@@ -330,8 +294,6 @@ func TestBoundary_BodySize(t *testing.T) {
 		body := prefix + strings.Repeat("x", padLen) + suffix
 
 		status, _ := doPost(t, ts.URL, key, body)
-		// DisallowUnknownFields will reject the _pad field → 400.
-		// The point is: MUST NOT panic or 500.
 		if status == http.StatusInternalServerError {
 			t.Fatalf("got 500 at exactly maxBodyBytes — server error")
 		}
@@ -339,7 +301,6 @@ func TestBoundary_BodySize(t *testing.T) {
 
 	t.Run("over_limit", func(t *testing.T) {
 		t.Parallel()
-		// Build a body that exceeds maxBodyBytes by 1.
 		prefix := `{"request_id":"over","coverage_lines":["auto"],"timeout_ms":5000,"_pad":"`
 		suffix := `"}`
 		padLen := maxBodyBytes - len(prefix) - len(suffix) + 1
@@ -352,27 +313,20 @@ func TestBoundary_BodySize(t *testing.T) {
 	})
 }
 
-// ---------------------------------------------------------------------------
-// 6. FUZZ LOOP — TestFuzz_RandomRequests
-// ---------------------------------------------------------------------------
-
 func TestFuzz_RandomRequests(t *testing.T) {
 	t.Parallel()
 	ts, key := newAntirezStack(t, 100)
 	rng := seededRand(t)
 
 	for i := 0; i < fuzzIterations; i++ {
-		// Random request_id: 0-300 chars, random bytes 0x00-0xFF.
 		idLen := rng.Intn(301)
 		idBytes := make([]byte, idLen)
 		for j := range idBytes {
 			idBytes[j] = byte(rng.Intn(256))
 		}
 
-		// JSON-safe request_id.
 		idJSON, _ := jsonMarshalString(string(idBytes))
 
-		// Random coverage_lines: 0-5 entries, mix of valid and garbage.
 		numLines := rng.Intn(6)
 		validLines := []string{"auto", "homeowners", "umbrella"}
 		lines := make([]string, numLines)
@@ -389,7 +343,6 @@ func TestFuzz_RandomRequests(t *testing.T) {
 			}
 		}
 
-		// Build coverage_lines JSON array.
 		var linesBuf bytes.Buffer
 		linesBuf.WriteByte('[')
 		for j, l := range lines {
@@ -401,7 +354,6 @@ func TestFuzz_RandomRequests(t *testing.T) {
 		}
 		linesBuf.WriteByte(']')
 
-		// Random timeout_ms: -100 to 40000.
 		timeoutMs := rng.Intn(40101) - 100
 
 		body := fmt.Sprintf(`{"request_id":%s,"coverage_lines":%s,"timeout_ms":%d}`,
@@ -417,10 +369,6 @@ func TestFuzz_RandomRequests(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// 7. FUZZ LOOP — TestFuzz_RandomAuth
-// ---------------------------------------------------------------------------
-
 func TestFuzz_RandomAuth(t *testing.T) {
 	t.Parallel()
 	ts, _ := newAntirezStack(t, 100)
@@ -431,9 +379,8 @@ func TestFuzz_RandomAuth(t *testing.T) {
 		var authHeader string
 		switch rng.Intn(6) {
 		case 0:
-			authHeader = "Bearer " + testAPIKey // valid
+			authHeader = "Bearer " + testAPIKey
 		case 1:
-			// Random bearer token.
 			rl := rng.Intn(100)
 			rb := make([]byte, rl)
 			for j := range rb {
@@ -441,14 +388,13 @@ func TestFuzz_RandomAuth(t *testing.T) {
 			}
 			authHeader = "Bearer " + string(rb)
 		case 2:
-			authHeader = "" // empty
+			authHeader = ""
 		case 3:
-			authHeader = "Basic dXNlcjpwYXNz" // wrong scheme
+			authHeader = "Basic dXNlcjpwYXNz"
 		case 4:
-			// Very long token.
 			authHeader = "Bearer " + strings.Repeat("x", 10000)
 		case 5:
-			authHeader = "Bearer " // bearer with empty token
+			authHeader = "Bearer "
 		}
 
 		req, err := http.NewRequest(http.MethodPost, ts.URL+"/quotes", strings.NewReader(body))
@@ -486,10 +432,6 @@ func TestFuzz_RandomAuth(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// 8. CORRUPTION — TestCorruption_MutatedJSON
-// ---------------------------------------------------------------------------
-
 func TestCorruption_MutatedJSON(t *testing.T) {
 	t.Parallel()
 	ts, key := newAntirezStack(t, 100)
@@ -502,21 +444,21 @@ func TestCorruption_MutatedJSON(t *testing.T) {
 		copy(mutated, base)
 
 		switch rng.Intn(4) {
-		case 0: // bit-flip random byte
+		case 0:
 			if len(mutated) > 0 {
 				idx := rng.Intn(len(mutated))
 				bit := byte(1 << uint(rng.Intn(8)))
 				mutated[idx] ^= bit
 			}
-		case 1: // truncate at random position
+		case 1:
 			if len(mutated) > 1 {
 				mutated = mutated[:rng.Intn(len(mutated))]
 			}
-		case 2: // insert random byte at random position
+		case 2:
 			idx := rng.Intn(len(mutated) + 1)
 			rb := byte(rng.Intn(256))
 			mutated = append(mutated[:idx], append([]byte{rb}, mutated[idx:]...)...)
-		case 3: // duplicate a random chunk
+		case 3:
 			if len(mutated) > 2 {
 				start := rng.Intn(len(mutated))
 				end := start + rng.Intn(len(mutated)-start) + 1
@@ -534,17 +476,12 @@ func TestCorruption_MutatedJSON(t *testing.T) {
 			t.Fatalf("iteration %d: got 500 with mutated body %q: %s", i, mutated, respBody)
 		}
 		if status != 200 && status != 400 {
-			// Some mutations may produce valid JSON with bad fields → 422 is also possible
 			if status != 422 {
 				t.Fatalf("iteration %d: unexpected status %d with mutated body: %s", i, status, respBody)
 			}
 		}
 	}
 }
-
-// ---------------------------------------------------------------------------
-// 9. CORRUPTION — TestCorruption_ExtraFields
-// ---------------------------------------------------------------------------
 
 func TestCorruption_ExtraFields(t *testing.T) {
 	t.Parallel()
@@ -557,26 +494,20 @@ func TestCorruption_ExtraFields(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// 10. CORRUPTION — TestCorruption_DuplicateKeys
-// ---------------------------------------------------------------------------
-
 func TestCorruption_DuplicateKeys(t *testing.T) {
 	t.Parallel()
 	ts, key := newAntirezStack(t, 100)
 
 	body := `{"request_id":"first","request_id":"second","coverage_lines":["auto"]}`
 	status, respBody := doPost(t, ts.URL, key, body)
-	// Go's json.Decoder with DisallowUnknownFields does not reject duplicate
-	// keys; last-wins semantics apply. So we expect either 200 or 400 but
-	// NEVER 500.
+	// encoding/json does not reject duplicate keys; last-wins applies.
+	// 500 is not an acceptable outcome.
 	if status == http.StatusInternalServerError {
 		t.Fatalf("got 500 with duplicate keys: %s", respBody)
 	}
 	// If accepted, the request_id should be "second" (last-wins).
 	if status == http.StatusOK {
 		if !bytes.Contains(respBody, []byte(`"second"`)) {
-			// Check the actual response contains request_id=second.
 			if !bytes.Contains(respBody, []byte(`request_id`)) {
 				t.Logf("response: %s", respBody)
 			}
@@ -584,15 +515,9 @@ func TestCorruption_DuplicateKeys(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// 11. STRESS — TestStress_RapidRequestCycles
-// ---------------------------------------------------------------------------
-
 func TestStress_RapidRequestCycles(t *testing.T) {
 	t.Parallel()
 
-	// Build the stack without relying on t.Cleanup for the server close —
-	// we need to close it explicitly to measure goroutine delta accurately.
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	rec := testutil.NewNoopRecorder()
 	reg := prometheus.NewRegistry()
@@ -658,7 +583,6 @@ func TestStress_RapidRequestCycles(t *testing.T) {
 	ts := httptest.NewServer(srv)
 	key := testAPIKey
 
-	// Use a transport that disables keep-alives.
 	tr := &http.Transport{DisableKeepAlives: true}
 	client := &http.Client{Transport: tr}
 
@@ -679,11 +603,8 @@ func TestStress_RapidRequestCycles(t *testing.T) {
 		resp.Body.Close()
 	}
 
-	// Snapshot goroutines right after all requests complete (before server
-	// close) to capture only the delta from our 1000 rapid requests.
 	goroutinesBeforeClose := runtime.NumGoroutine()
 
-	// Close client transport and server before measuring goroutines.
 	tr.CloseIdleConnections()
 	ts.Close()
 	stopAuth()
@@ -693,24 +614,15 @@ func TestStress_RapidRequestCycles(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 
 	goroutinesAfterClose := runtime.NumGoroutine()
-	// The test proves that 1000 rapid request cycles do not accumulate
-	// goroutines. After closing the server, the delta should be large and
-	// negative (server goroutines freed). If goroutines grew after close,
-	// something is leaking.
 	delta := goroutinesAfterClose - goroutinesBeforeClose
 	t.Logf("goroutines: before_close=%d after_close=%d delta=%d",
 		goroutinesBeforeClose, goroutinesAfterClose, delta)
-	// Delta should be negative (server goroutines freed) or at most slightly
-	// positive due to GC/runtime jitter. A large positive delta means a leak.
+	// A large positive delta means a leak. Small jitter from GC is ignored.
 	if delta > 10 {
 		t.Errorf("goroutine leak suspected: delta=%d (before_close=%d, after_close=%d)",
 			delta, goroutinesBeforeClose, goroutinesAfterClose)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// 12. CONCURRENCY — TestConcurrency_FanInStorm
-// ---------------------------------------------------------------------------
 
 func TestConcurrency_FanInStorm(t *testing.T) {
 	t.Parallel()
@@ -758,10 +670,6 @@ func TestConcurrency_FanInStorm(t *testing.T) {
 		}
 	}
 }
-
-// ---------------------------------------------------------------------------
-// 13. CONCURRENCY — TestConcurrency_MixedAuthStorm
-// ---------------------------------------------------------------------------
 
 func TestConcurrency_MixedAuthStorm(t *testing.T) {
 	t.Parallel()
@@ -831,10 +739,6 @@ func TestConcurrency_MixedAuthStorm(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// 14. CONCURRENCY — TestConcurrency_SameRequestID
-// ---------------------------------------------------------------------------
-
 func TestConcurrency_SameRequestID(t *testing.T) {
 	t.Parallel()
 	ts, key := newAntirezStack(t, 100)
@@ -878,14 +782,9 @@ func TestConcurrency_SameRequestID(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// 15. CONCURRENCY — TestConcurrency_ContextCancelMidFlight
-// ---------------------------------------------------------------------------
-
 func TestConcurrency_ContextCancelMidFlight(t *testing.T) {
 	t.Parallel()
 
-	// Build the stack manually so we can close the server explicitly.
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	rec := testutil.NewNoopRecorder()
 	reg := prometheus.NewRegistry()
@@ -965,38 +864,26 @@ func TestConcurrency_ContextCancelMidFlight(t *testing.T) {
 
 		resp, err := client.Do(req)
 		if err != nil {
-			// Timeout error is expected.
 			continue
 		}
 		io.ReadAll(resp.Body)
 		resp.Body.Close()
 	}
 
-	// Close everything, then verify goroutines drain.
 	tr.CloseIdleConnections()
 	ts.Close()
 	stopAuth()
 
-	// Wait for goroutines to drain. With context cancellation mid-flight,
-	// the orchestrator's singleflight and fan-out goroutines need time to
-	// exit. We poll rather than assert a hard delta because other parallel
-	// tests in the process also contribute to runtime.NumGoroutine().
+	// Goroutine count is not asserted: other tests in this process also
+	// contribute to runtime.NumGoroutine.
 	runtime.GC()
 	time.Sleep(2 * time.Second)
-
-	// Smoke check: the test did not deadlock or panic, and the server
-	// shut down cleanly. Goroutine count is not asserted because it is
-	// unreliable when other tests run in parallel in the same process.
 	t.Logf("goroutines after drain: %d", runtime.NumGoroutine())
 }
 
-// ---------------------------------------------------------------------------
-// 16. CONCURRENCY — TestConcurrency_ConcurrencyLimitUnderLoad
-// ---------------------------------------------------------------------------
-
 func TestConcurrency_ConcurrencyLimitUnderLoad(t *testing.T) {
 	t.Parallel()
-	ts, key := newAntirezStack(t, 5) // low concurrency limit
+	ts, key := newAntirezStack(t, 5)
 
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -1048,13 +935,8 @@ func TestConcurrency_ConcurrencyLimitUnderLoad(t *testing.T) {
 	t.Logf("200s: %d, 503s: %d", got200, got503)
 }
 
-// ---------------------------------------------------------------------------
-// Goroutine leak check via goleak
-// ---------------------------------------------------------------------------
-
 func TestMain(m *testing.M) {
 	goleak.VerifyTestMain(m,
-		// Known background goroutines that are safe to ignore.
 		goleak.IgnoreTopFunction("net/http.(*persistConn).writeLoop"),
 		goleak.IgnoreTopFunction("net/http.(*persistConn).readLoop"),
 		goleak.IgnoreTopFunction("internal/poll.runtime_pollWait"),

@@ -17,7 +17,6 @@ import (
 	"github.com/rechedev9/riskforge/internal/testutil"
 )
 
-// noopOrchestrator always returns an empty result set with no error.
 type noopOrchestrator struct{}
 
 func (o *noopOrchestrator) GetQuotes(_ context.Context, _ domain.QuoteRequest) ([]domain.QuoteResult, error) {
@@ -26,10 +25,7 @@ func (o *noopOrchestrator) GetQuotes(_ context.Context, _ domain.QuoteRequest) (
 
 var _ ports.OrchestratorPort = (*noopOrchestrator)(nil)
 
-// FuzzPostQuotes sends random bytes as the POST /quotes body.
-// The handler must never panic regardless of input.
 func FuzzPostQuotes(f *testing.F) {
-	// Seed corpus: valid, edge-case, and adversarial inputs.
 	f.Add([]byte(`{"request_id":"test","coverage_lines":["auto"],"timeout_ms":5000}`))
 	f.Add([]byte(`{}`))
 	f.Add([]byte(`{"request_id":"","coverage_lines":[]}`))
@@ -66,8 +62,6 @@ func FuzzPostQuotes(f *testing.F) {
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, req)
 
-		// The only assertion: the handler returned a valid HTTP status code
-		// and did not panic.
 		if w.Code < 200 || w.Code > 599 {
 			t.Fatalf("unexpected status code: %d", w.Code)
 		}

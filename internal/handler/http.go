@@ -1,7 +1,4 @@
 // Package handler provides the HTTP layer for the carrier gateway.
-// It registers POST /quotes and GET /metrics on a stdlib ServeMux,
-// validates input, delegates to the orchestrator, and encodes JSON responses.
-// Graceful shutdown is handled via the Shutdown method.
 package handler
 
 import (
@@ -24,12 +21,12 @@ import (
 
 // Request size limits and defaults.
 const (
-	maxBodyBytes        = 1 << 20          // 1 MiB
-	defaultTimeoutMs    = 5_000            // 5 seconds
-	minTimeoutMs        = 100              // 100 ms
-	maxTimeoutMs        = 30_000           // 30 seconds
-	maxRequestIDLen     = 256              // caps memory/DB impact from oversized IDs
-	shutdownDrainWindow = 30 * time.Second // graceful drain timeout
+	maxBodyBytes        = 1 << 20
+	defaultTimeoutMs    = 5_000
+	minTimeoutMs        = 100
+	maxTimeoutMs        = 30_000
+	maxRequestIDLen     = 256 // caps memory/DB impact from oversized IDs
+	shutdownDrainWindow = 30 * time.Second
 )
 
 // Handler holds all HTTP handler dependencies.
@@ -69,7 +66,6 @@ func New(c HandlerConfig) *Handler {
 	}
 }
 
-// RegisterRoutes registers POST /quotes, GET /metrics, and GET /healthz on mux.
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /quotes", h.handlePostQuotes)
 	mux.HandleFunc("GET /metrics", promhttp.HandlerFor(h.gatherer, promhttp.HandlerOpts{}).ServeHTTP)
@@ -80,8 +76,6 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /readyz", h.handleReadyz)
 }
 
-// handleReadyz checks DB connectivity when a database is configured.
-// Returns 200 when healthy (or no DB), 503 when DB is unreachable.
 const readyzTimeout = 2 * time.Second
 
 func (h *Handler) handleReadyz(w http.ResponseWriter, r *http.Request) {
@@ -117,8 +111,6 @@ func (h *Handler) Shutdown(ctx context.Context, srv *http.Server) error {
 	return nil
 }
 
-// --- HTTP request/response types (unexported) ---
-
 // quoteRequest is the inbound JSON schema for POST /quotes.
 type quoteRequest struct {
 	RequestID     string   `json:"request_id"`
@@ -147,8 +139,6 @@ type quoteItem struct {
 type errorResponse struct {
 	Error string `json:"error"`
 }
-
-// --- Handler methods ---
 
 // handlePostQuotes handles POST /quotes.
 func (h *Handler) handlePostQuotes(w http.ResponseWriter, r *http.Request) {
@@ -280,8 +270,6 @@ func (h *Handler) writeErrorBody(w http.ResponseWriter, status int, message stri
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(errorResponse{Error: message})
 }
-
-// --- Validation helpers ---
 
 // validateQuoteRequest validates the inbound quote request, returning a
 // descriptive error if any field is invalid.

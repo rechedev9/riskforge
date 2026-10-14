@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"slices"
+	"strconv"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -31,9 +32,8 @@ type Config struct {
 	HedgePollInterval time.Duration
 }
 
-// Orchestrator implements ports.OrchestratorPort. It fans out quote requests
-// to all eligible carriers in parallel, runs an adaptive hedge monitor, and
-// returns results sorted by premium ascending.
+// Orchestrator fans out quote requests to all eligible carriers in parallel,
+// runs an adaptive hedge monitor, and returns results sorted by premium ascending.
 //
 // All fields are set once at construction and treated as immutable during
 // GetQuotes — making the struct safe for concurrent use.
@@ -44,10 +44,10 @@ type Orchestrator struct {
 	limiters map[string]*ratelimiter.Limiter
 	trackers map[string]*EMATracker
 	metrics  ports.MetricsRecorder
-	repo     ports.QuoteRepository // optional; nil disables persistence
+	repo     ports.QuoteRepository
 	cfg      Config
 	log      *slog.Logger
-	sfGroup  singleflight.Group // deduplicates concurrent requests with same request_id
+	sfGroup  singleflight.Group
 }
 
 // OrchestratorConfig holds all dependencies for constructing an Orchestrator.
@@ -80,9 +80,7 @@ func New(c OrchestratorConfig) *Orchestrator {
 	}
 }
 
-// GetQuotes implements ports.OrchestratorPort.
-//
-// It fans out to all eligible carriers in parallel using errgroup, runs a
+// GetQuotes fans out to all eligible carriers in parallel using errgroup, runs a
 // concurrent hedge monitor, collects and deduplicates results, then returns
 // them sorted by premium ascending. Partial results are returned when the
 // request context deadline arrives before all carriers respond.
@@ -92,11 +90,10 @@ func New(c OrchestratorConfig) *Orchestrator {
 // fan-out and returns the cached results directly. On a cache miss, results
 // are saved after the fan-out completes.
 func (o *Orchestrator) GetQuotes(ctx context.Context, req domain.QuoteRequest) ([]domain.QuoteResult, error) {
-	cacheKey := scopedKey(req)
+	cacheKey := newScopeKey(req)
 
-	// Cache lookup — only when a repository is wired in.
 	if o.repo != nil && req.RequestID != "" {
-		if cached, ok, err := o.repo.FindByRequestID(ctx, cacheKey); err != nil {
+		if cached, ok, err := o.repo.FindByRequestID(ctx, cacheKey.encode()); err != nil {
 			o.log.Warn("cache lookup failed, proceeding with fan-out",
 				slog.String("request_id", req.RequestID),
 				slog.String("error", err.Error()),
@@ -116,7 +113,7 @@ func (o *Orchestrator) GetQuotes(ctx context.Context, req domain.QuoteRequest) (
 	// tied to the first caller's deadline — fanOut creates its own timeout
 	// from req.Timeout.
 	if req.RequestID != "" {
-		v, err, shared := o.sfGroup.Do(cacheKey, func() (any, error) {
+		v, err, shared := o.sfGroup.Do(cacheKey.encode(), func() (any, error) {
 			return o.fanOut(context.WithoutCancel(ctx), req)
 		})
 		if shared {
@@ -203,7 +200,8 @@ func (o *Orchestrator) fanOut(ctx context.Context, req domain.QuoteRequest) ([]d
 	for _, c := range eligible {
 		carrier := c
 		g.Go(func() error {
-			return o.callCarrier(gCtx, carrier, req, results)
+			o.callCarrier(gCtx, carrier, req, results)
+			return nil
 		})
 	}
 
@@ -211,9 +209,9 @@ func (o *Orchestrator) fanOut(ctx context.Context, req domain.QuoteRequest) ([]d
 	seen := make(map[string]bool, len(eligible))
 
 	go func() {
-		_ = g.Wait()  // wait for primary carriers only
-		hedgeCancel() // signal hedgeMonitor to stop
-		<-hedgeDone   // wait for hedgeMonitor + its hedge goroutines
+		_ = g.Wait()
+		hedgeCancel()
+		<-hedgeDone
 		close(results)
 	}()
 
@@ -245,7 +243,7 @@ func (o *Orchestrator) fanOut(ctx context.Context, req domain.QuoteRequest) ([]d
 	if o.repo != nil && req.RequestID != "" && len(collected) > 0 {
 		saveCtx, saveCancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer saveCancel()
-		if err := o.repo.Save(saveCtx, scopedKey(req), collected); err != nil {
+		if err := o.repo.Save(saveCtx, newScopeKey(req).encode(), collected); err != nil {
 			o.log.Warn("failed to save quotes to repository",
 				slog.String("request_id", req.RequestID),
 				slog.String("error", err.Error()),
@@ -284,14 +282,13 @@ func (o *Orchestrator) filterEligibleCarriers(lines []domain.CoverageLine) []dom
 
 // callCarrier executes the full rate-limit → circuit-breaker → adapter pipeline
 // for a single carrier. It sends the result to the results channel and records
-// metrics. Errors are handled internally — they are logged and recorded but not
-// propagated via the errgroup (partial results are acceptable).
+// metrics. A carrier failure is logged and recorded; it does not fail the fan-out.
 func (o *Orchestrator) callCarrier(
 	ctx context.Context,
 	carrier domain.Carrier,
 	req domain.QuoteRequest,
 	results chan<- domain.QuoteResult,
-) error {
+) {
 	limiter := o.limiters[carrier.ID]
 	breaker := o.breakers[carrier.ID]
 	tracker := o.trackers[carrier.ID]
@@ -301,20 +298,18 @@ func (o *Orchestrator) callCarrier(
 			slog.String("request_id", req.RequestID),
 			slog.String("carrier_id", carrier.ID),
 		)
-		return nil
+		return
 	}
 
-	// Step 1: rate limiter — blocks until token or ctx done.
 	if err := limiter.Wait(ctx); err != nil {
 		o.log.Info("carrier skipped: rate limited",
 			slog.String("request_id", req.RequestID),
 			slog.String("carrier_id", carrier.ID),
 		)
 		o.metrics.RecordQuote(carrier.ID, 0, "rate_limited")
-		return nil // partial result — do not fail the entire fan-out
+		return
 	}
 
-	// Step 2: circuit breaker wraps the adapter call.
 	callStart := time.Now()
 	cbErr := breaker.Execute(ctx, func() error {
 		result, err := execFn(ctx, req)
@@ -352,8 +347,6 @@ func (o *Orchestrator) callCarrier(
 			slog.String("error", cbErr.Error()),
 		)
 	}
-
-	return nil // always return nil — partial results are acceptable
 }
 
 // classifyError maps a carrier call error to a status string for metrics.
@@ -370,15 +363,17 @@ func classifyError(err error) string {
 	}
 }
 
-// scopedKey returns a cache/singleflight key scoped to the authenticated client.
-// This prevents different API key holders from sharing or stealing cached results
-// by sending the same request_id.
-func scopedKey(req domain.QuoteRequest) string {
-	if req.ClientID == "" {
-		return req.RequestID
-	}
-	return req.ClientID + ":" + req.RequestID
+type scopeKey struct {
+	clientID  string
+	requestID string
 }
 
-// Compile-time assertion that Orchestrator satisfies ports.OrchestratorPort.
+func newScopeKey(req domain.QuoteRequest) scopeKey {
+	return scopeKey{clientID: req.ClientID, requestID: req.RequestID}
+}
+
+func (k scopeKey) encode() string {
+	return strconv.Itoa(len(k.clientID)) + ":" + k.clientID + ":" + k.requestID
+}
+
 var _ ports.OrchestratorPort = (*Orchestrator)(nil)

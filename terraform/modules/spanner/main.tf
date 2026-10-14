@@ -1,7 +1,3 @@
-# -----------------------------------------------------------------------------
-# Spanner Instance
-# -----------------------------------------------------------------------------
-
 resource "google_spanner_instance" "main" {
   name             = "appetite-engine-${var.environment}"
   config           = "regional-${var.region}"
@@ -14,10 +10,6 @@ resource "google_spanner_instance" "main" {
     environment = var.environment
   }
 }
-
-# -----------------------------------------------------------------------------
-# Spanner Database with DDL
-# -----------------------------------------------------------------------------
 
 resource "google_spanner_database" "main" {
   instance                 = google_spanner_instance.main.name
@@ -80,10 +72,6 @@ resource "google_spanner_database" "main" {
     ignore_changes = [ddl]
   }
 }
-
-# -----------------------------------------------------------------------------
-# Database IAM Binding
-# -----------------------------------------------------------------------------
 
 resource "google_spanner_database_iam_binding" "database_user" {
   instance = google_spanner_instance.main.name

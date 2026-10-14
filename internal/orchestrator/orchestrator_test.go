@@ -2,7 +2,6 @@
 // fan-out, partial results, deduplication) and integration/concurrency
 // scenarios (goroutine safety, CB/limiter interaction, hedging).
 //
-// Tasks 4.6 (unit) and 4.7 (integration/concurrency).
 // REQ-ORCH-001 through REQ-ORCH-006, REQ-HEDGE-003 through REQ-HEDGE-005.
 package orchestrator_test
 
@@ -20,11 +19,8 @@ import (
 	"github.com/rechedev9/riskforge/internal/testutil"
 )
 
-// ---- helpers ----------------------------------------------------------------
-
 var discardLog = slog.New(slog.NewTextHandler(io.Discard, nil))
 
-// makeCarrier builds a domain.Carrier with the given ID, capabilities, and config.
 func makeCarrier(id string, capabilities []domain.CoverageLine, cfg domain.CarrierConfig) domain.Carrier {
 	return domain.Carrier{
 		ID:           id,
@@ -34,7 +30,6 @@ func makeCarrier(id string, capabilities []domain.CoverageLine, cfg domain.Carri
 	}
 }
 
-// defaultCfg returns a sensible CarrierConfig for unit tests.
 func defaultCfg() domain.CarrierConfig {
 	return domain.CarrierConfig{
 		TimeoutHint:           100 * time.Millisecond,
@@ -49,14 +44,12 @@ func defaultCfg() domain.CarrierConfig {
 	}
 }
 
-// preWarmedCfg returns a CarrierConfig with warmup disabled (0 observations).
 func preWarmedCfg() domain.CarrierConfig {
 	cfg := defaultCfg()
 	cfg.EMAWarmupObservations = 0
 	return cfg
 }
 
-// orchestratorFixture holds everything needed to construct an Orchestrator.
 type orchestratorFixture struct {
 	carriers []domain.Carrier
 	registry *adapter.Registry
@@ -66,9 +59,6 @@ type orchestratorFixture struct {
 	metrics  *testutil.NoopRecorder
 }
 
-// newFixture builds a fixture for the given carriers, registering a MockCarrier
-// for each via RegisterMockCarrier. All limiters are set to high capacity so
-// they don't interfere with unit tests unless overridden.
 func newFixture(t *testing.T, carriers []domain.Carrier) *orchestratorFixture {
 	t.Helper()
 	fix := &orchestratorFixture{
@@ -80,7 +70,6 @@ func newFixture(t *testing.T, carriers []domain.Carrier) *orchestratorFixture {
 		metrics:  testutil.NewNoopRecorder(),
 	}
 	for _, c := range carriers {
-		// Register a fast, reliable mock carrier for each.
 		mc := adapter.NewMockCarrier(c.ID, adapter.MockConfig{
 			BaseLatency: 10 * time.Millisecond,
 			JitterMs:    0,
@@ -100,7 +89,6 @@ func newFixture(t *testing.T, carriers []domain.Carrier) *orchestratorFixture {
 	return fix
 }
 
-// build returns an Orchestrator from the fixture.
 func (f *orchestratorFixture) build(t *testing.T) *orchestrator.Orchestrator {
 	t.Helper()
 	return orchestrator.New(orchestrator.OrchestratorConfig{
@@ -112,11 +100,10 @@ func (f *orchestratorFixture) build(t *testing.T) *orchestrator.Orchestrator {
 		Metrics:  f.metrics,
 		Cfg:      orchestrator.Config{HedgePollInterval: 5 * time.Millisecond},
 		Log:      discardLog,
-		Repo:     nil, // no repository in unit tests
+		Repo:     nil,
 	})
 }
 
-// carrierIDs extracts carrier IDs from results for diagnostic messages.
 func carrierIDs(results []domain.QuoteResult) []string {
 	ids := make([]string, len(results))
 	for i, r := range results {
@@ -125,14 +112,9 @@ func carrierIDs(results []domain.QuoteResult) []string {
 	return ids
 }
 
-// ---- Part 1: Unit scenarios (task 4.6) -------------------------------------
-
 func TestOrchestrator_IneligibleCarrierExcluded(t *testing.T) {
 	t.Parallel()
 
-	// REQ-ORCH-001: only capable carriers receive goroutines.
-	// Gamma is registered with "life" capabilities; request is for "auto".
-	// Gamma must not appear in results.
 	alpha := makeCarrier("alpha", []domain.CoverageLine{domain.CoverageLineAuto}, defaultCfg())
 	gamma := makeCarrier("gamma", []domain.CoverageLine{"life"}, defaultCfg())
 
@@ -161,7 +143,6 @@ func TestOrchestrator_IneligibleCarrierExcluded(t *testing.T) {
 func TestOrchestrator_NoMatchingCarriers_ReturnsEmpty(t *testing.T) {
 	t.Parallel()
 
-	// REQ-ORCH-001: no carriers match the requested coverage → empty result + no error.
 	gamma := makeCarrier("gamma", []domain.CoverageLine{"life"}, defaultCfg())
 	fix := newFixture(t, []domain.Carrier{gamma})
 	orch := fix.build(t)
@@ -183,12 +164,6 @@ func TestOrchestrator_NoMatchingCarriers_ReturnsEmpty(t *testing.T) {
 func TestOrchestrator_ResultsSortedByPremiumAscending(t *testing.T) {
 	t.Parallel()
 
-	// REQ-ORCH-004: results sorted by premium ascending.
-	// We use real carriers but control premium via mock response.
-	// MockCarrier premium = len(id)*10000 + rand[0,50000).
-	// "alpha" (5 chars) → ~50000–100000 cents
-	// "beta" (4 chars)  → ~40000–90000 cents
-	// With high probability beta < alpha; but we just verify sort order.
 	alpha := makeCarrier("alpha", []domain.CoverageLine{domain.CoverageLineAuto}, defaultCfg())
 	beta := makeCarrier("beta", []domain.CoverageLine{domain.CoverageLineAuto}, defaultCfg())
 
@@ -218,8 +193,6 @@ func TestOrchestrator_ResultsSortedByPremiumAscending(t *testing.T) {
 func TestOrchestrator_DuplicateCarrierResultsDeduplicated(t *testing.T) {
 	t.Parallel()
 
-	// REQ-ORCH-004: duplicate carrier results (primary + hedge) deduplicated to first arrival.
-	// We use a single fast carrier to get a result; dedup is enforced by seen map.
 	alpha := makeCarrier("alpha", []domain.CoverageLine{domain.CoverageLineAuto}, preWarmedCfg())
 	fix := newFixture(t, []domain.Carrier{alpha})
 	orch := fix.build(t)
@@ -233,7 +206,6 @@ func TestOrchestrator_DuplicateCarrierResultsDeduplicated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("REQ-ORCH-004: unexpected error: %v", err)
 	}
-	// Count occurrences of each carrier ID — must be exactly 1.
 	seen := make(map[string]int)
 	for _, r := range results {
 		seen[r.CarrierID]++

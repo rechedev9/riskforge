@@ -62,6 +62,7 @@ func Run(ctx context.Context, _ []string, stdout, _ io.Writer) error {
 	spannerDB := os.Getenv("SPANNER_DATABASE")
 
 	var carriers []domain.Carrier
+	fromSpanner := false
 
 	if spannerProject != "" && spannerInstance != "" && spannerDB != "" {
 		spannerClient, err := spanneradapter.NewClient(ctx, spannerProject, spannerInstance, spannerDB)
@@ -82,6 +83,7 @@ func Run(ctx context.Context, _ []string, stdout, _ io.Writer) error {
 			carriers = buildCarriers()
 		} else {
 			carriers = dbCarriers
+			fromSpanner = true
 			log.Info("loaded carriers from spanner", "count", len(carriers))
 		}
 
@@ -147,14 +149,20 @@ func Run(ctx context.Context, _ []string, stdout, _ io.Writer) error {
 			rec,
 		)
 
-		// Mock carriers for all (real HTTP carriers would be wired per-carrier config).
+		if fromSpanner {
+			fn, err := adapter.NewCarrierAdapter(c, log)
+			if err != nil {
+				return fmt.Errorf("register carrier %s: %w", c.ID, err)
+			}
+			registry.Register(c.ID, fn)
+			continue
+		}
 		mock := adapter.NewMockCarrier(c.ID, adapter.MockConfig{
 			BaseLatency: cfg.TimeoutHint,
 			JitterMs:    10,
 			FailureRate: 0.0,
 		}, log)
-		fn := adapter.RegisterMockCarrier(mock)
-		registry.Register(c.ID, fn)
+		registry.Register(c.ID, adapter.RegisterMockCarrier(mock))
 	}
 
 	orch := orchestrator.New(orchestrator.OrchestratorConfig{

@@ -12,8 +12,6 @@ import (
 	"github.com/rechedev9/riskforge/internal/ports"
 )
 
-// Metric name constants. Keeping these as named constants prevents typos and
-// makes it easy to grep for metric names across the codebase.
 const (
 	metricCBState        = "carrier_circuit_breaker_state"
 	metricP95Latency     = "carrier_p95_latency_ms"
@@ -33,8 +31,7 @@ var quoteLatencyBuckets = []float64{0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5,
 // total GetQuotes fan-out duration.
 var fanOutDurationBuckets = []float64{0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0}
 
-// PrometheusRecorder implements ports.MetricsRecorder using Prometheus
-// client_golang. All methods are safe for concurrent use.
+// All methods are safe for concurrent use.
 type PrometheusRecorder struct {
 	cbStateGauge       *prometheus.GaugeVec
 	p95LatencyGauge    *prometheus.GaugeVec
@@ -131,38 +128,31 @@ func New(reg prometheus.Registerer) *PrometheusRecorder {
 	return r
 }
 
-// RecordQuote implements ports.MetricsRecorder.
 func (r *PrometheusRecorder) RecordQuote(carrierID string, latency time.Duration, status string) {
 	r.requestsTotal.WithLabelValues(carrierID, status).Inc()
 	r.quoteLatencyHist.WithLabelValues(carrierID, status).Observe(latency.Seconds())
 }
 
-// RecordHedge implements ports.MetricsRecorder.
 func (r *PrometheusRecorder) RecordHedge(hedgeCarrierID, triggerCarrierID string) {
 	r.hedgesTotal.WithLabelValues(hedgeCarrierID, triggerCarrierID).Inc()
 }
 
-// RecordCBTransition implements ports.MetricsRecorder.
 func (r *PrometheusRecorder) RecordCBTransition(carrierID string, from, to ports.CBState) {
 	r.cbTransitionsTotal.WithLabelValues(carrierID, cbStateLabel(from), cbStateLabel(to)).Inc()
 }
 
-// RecordRateLimitRejection implements ports.MetricsRecorder.
 func (r *PrometheusRecorder) RecordRateLimitRejection(carrierID string) {
 	r.rateLimitTotal.WithLabelValues(carrierID).Inc()
 }
 
-// RecordFanOutDuration implements ports.MetricsRecorder.
 func (r *PrometheusRecorder) RecordFanOutDuration(duration time.Duration) {
 	r.fanOutDurationHist.Observe(duration.Seconds())
 }
 
-// SetCBState implements ports.MetricsRecorder.
 func (r *PrometheusRecorder) SetCBState(carrierID string, state ports.CBState) {
 	r.cbStateGauge.WithLabelValues(carrierID).Set(float64(state))
 }
 
-// SetP95Latency implements ports.MetricsRecorder.
 func (r *PrometheusRecorder) SetP95Latency(carrierID string, ms float64) {
 	r.p95LatencyGauge.WithLabelValues(carrierID).Set(ms)
 }
@@ -181,5 +171,4 @@ func cbStateLabel(s ports.CBState) string {
 	}
 }
 
-// Compile-time assertion that PrometheusRecorder satisfies ports.MetricsRecorder.
 var _ ports.MetricsRecorder = (*PrometheusRecorder)(nil)

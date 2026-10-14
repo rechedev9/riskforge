@@ -15,11 +15,8 @@ import (
 	"github.com/rechedev9/riskforge/internal/testutil"
 )
 
-// ---- Part 2: Concurrency (task 4.7) -----------------------------------------
-
 func TestOrchestrator_AllThreeCarriersRespond_ReturnsSortedResults(t *testing.T) {
 	t.Parallel()
-	// REQ-ORCH-002: all three carriers respond → returns ≥2 results sorted ascending.
 	alpha := makeCarrier("alpha", []domain.CoverageLine{domain.CoverageLineAuto}, defaultCfg())
 	beta := makeCarrier("beta", []domain.CoverageLine{domain.CoverageLineAuto}, defaultCfg())
 	gamma := makeCarrier("gamma", []domain.CoverageLine{domain.CoverageLineAuto}, defaultCfg())
@@ -48,7 +45,6 @@ func TestOrchestrator_AllThreeCarriersRespond_ReturnsSortedResults(t *testing.T)
 
 func TestOrchestrator_OpenCBCarrierExcluded(t *testing.T) {
 	t.Parallel()
-	// REQ-ORCH-003: carrier with Open CB excluded from fan-out results.
 	alphaCfg := defaultCfg()
 	alphaCfg.FailureThreshold = 1
 	alpha := makeCarrier("alpha", []domain.CoverageLine{domain.CoverageLineAuto}, alphaCfg)
@@ -56,7 +52,6 @@ func TestOrchestrator_OpenCBCarrierExcluded(t *testing.T) {
 
 	fix := newFixture(t, []domain.Carrier{alpha, beta})
 
-	// Trip alpha's circuit breaker to Open by registering a failing carrier.
 	failingMC := adapter.NewMockCarrier("alpha", adapter.MockConfig{
 		BaseLatency: 1 * time.Millisecond,
 		FailureRate: 1.0,
@@ -65,7 +60,6 @@ func TestOrchestrator_OpenCBCarrierExcluded(t *testing.T) {
 
 	orch := fix.build(t)
 
-	// First call — alpha will fail and open its CB.
 	req := domain.QuoteRequest{
 		RequestID:     "int-cb-trip",
 		CoverageLines: []domain.CoverageLine{domain.CoverageLineAuto},
@@ -73,12 +67,10 @@ func TestOrchestrator_OpenCBCarrierExcluded(t *testing.T) {
 	}
 	_, _ = orch.GetQuotes(t.Context(), req)
 
-	// Verify alpha CB is now Open.
 	if fix.breakers["alpha"].State() != ports.CBStateOpen {
 		t.Skip("alpha CB not tripped — probabilistic test, skipping")
 	}
 
-	// Second call — alpha CB is Open so it short-circuits; only beta returns.
 	req2 := domain.QuoteRequest{
 		RequestID:     "int-02",
 		CoverageLines: []domain.CoverageLine{domain.CoverageLineAuto},
@@ -97,7 +89,6 @@ func TestOrchestrator_OpenCBCarrierExcluded(t *testing.T) {
 
 func TestOrchestrator_RateLimiterExhausted_CarrierSkipped(t *testing.T) {
 	t.Parallel()
-	// REQ-ORCH-003: carrier whose rate limiter is exhausted skipped in fan-out.
 	alphaCfg := defaultCfg()
 	alphaCfg.RateLimit = domain.RateLimitConfig{TokensPerSecond: 0.001, Burst: 1}
 	alpha := makeCarrier("alpha", []domain.CoverageLine{domain.CoverageLineAuto}, alphaCfg)
@@ -105,7 +96,6 @@ func TestOrchestrator_RateLimiterExhausted_CarrierSkipped(t *testing.T) {
 
 	fix := newFixture(t, []domain.Carrier{alpha, beta})
 
-	// Drain alpha's token manually.
 	fix.limiters["alpha"].TryAcquire()
 
 	orch := fix.build(t)
@@ -122,7 +112,6 @@ func TestOrchestrator_RateLimiterExhausted_CarrierSkipped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Beta should still respond; alpha skipped (rate limited).
 	hasBeta := false
 	for _, r := range results {
 		if r.CarrierID == "beta" {
@@ -137,7 +126,6 @@ func TestOrchestrator_RateLimiterExhausted_CarrierSkipped(t *testing.T) {
 func TestOrchestrator_ShortTimeout_OnlyFastCarrierReturns(t *testing.T) {
 	t.Parallel()
 
-	// REQ-ORCH-005: short timeout (300ms) returns only fast carrier results — no Gamma.
 	alpha := makeCarrier("alpha", []domain.CoverageLine{domain.CoverageLineAuto}, defaultCfg())
 
 	gammaCfg := defaultCfg()
@@ -146,7 +134,6 @@ func TestOrchestrator_ShortTimeout_OnlyFastCarrierReturns(t *testing.T) {
 
 	fix := newFixture(t, []domain.Carrier{alpha, gamma})
 
-	// Override gamma with the slow mock (800ms).
 	slowGamma := adapter.NewGamma(discardLog)
 	fix.registry.Register("gamma", adapter.RegisterMockCarrier(slowGamma))
 
@@ -166,7 +153,6 @@ func TestOrchestrator_ShortTimeout_OnlyFastCarrierReturns(t *testing.T) {
 			t.Fatal("REQ-ORCH-005: gamma (800ms) should not appear with 300ms timeout")
 		}
 	}
-	// Alpha (10ms) must be in results.
 	hasAlpha := false
 	for _, r := range results {
 		if r.CarrierID == "alpha" {
@@ -179,13 +165,10 @@ func TestOrchestrator_ShortTimeout_OnlyFastCarrierReturns(t *testing.T) {
 }
 
 func TestOrchestrator_NoGoroutineLeak_AfterCtxCancel(t *testing.T) {
-	// REQ-ORCH-006: no goroutine leak after context cancellation.
-	// we wait for goroutines to exit naturally.
 	alpha := makeCarrier("alpha", []domain.CoverageLine{domain.CoverageLineAuto}, defaultCfg())
 	gamma := makeCarrier("gamma", []domain.CoverageLine{domain.CoverageLineAuto}, defaultCfg())
 
 	fix := newFixture(t, []domain.Carrier{alpha, gamma})
-	// Replace gamma with a blocking carrier.
 	slowGamma := adapter.NewGamma(discardLog)
 	fix.registry.Register("gamma", adapter.RegisterMockCarrier(slowGamma))
 
@@ -199,7 +182,6 @@ func TestOrchestrator_NoGoroutineLeak_AfterCtxCancel(t *testing.T) {
 		Timeout:       200 * time.Millisecond,
 	}
 
-	// Run GetQuotes with short timeout — cancel parent ctx too.
 	go func() {
 		time.Sleep(100 * time.Millisecond)
 		cancel()
@@ -214,7 +196,6 @@ func TestOrchestrator_NoGoroutineLeak_AfterCtxCancel(t *testing.T) {
 
 func TestOrchestrator_ConcurrentGetQuotes_NoRace(t *testing.T) {
 	t.Parallel()
-	// REQ-ORCH-006: 100 concurrent GetQuotes with -race — zero data races.
 	alpha := makeCarrier("alpha", []domain.CoverageLine{domain.CoverageLineAuto}, defaultCfg())
 	beta := makeCarrier("beta", []domain.CoverageLine{domain.CoverageLineAuto}, defaultCfg())
 
@@ -242,15 +223,11 @@ func TestOrchestrator_ConcurrentGetQuotes_NoRace(t *testing.T) {
 func TestOrchestrator_MissingRegistryEntry_NoPanic(t *testing.T) {
 	t.Parallel()
 
-	// FIX-M4: A carrier in the carriers slice but NOT in the adapter registry
-	// must not cause a panic. The carrier should be skipped silently.
 	alpha := makeCarrier("alpha", []domain.CoverageLine{domain.CoverageLineAuto}, defaultCfg())
 	ghost := makeCarrier("ghost", []domain.CoverageLine{domain.CoverageLineAuto}, defaultCfg())
 
 	fix := newFixture(t, []domain.Carrier{alpha, ghost})
-	// Remove ghost from the registry so it has no adapter.
 	fix.registry = adapter.NewRegistry()
-	// Re-register only alpha.
 	mc := adapter.NewMockCarrier("alpha", adapter.MockConfig{
 		BaseLatency: 10 * time.Millisecond,
 		FailureRate: 0.0,
@@ -268,7 +245,6 @@ func TestOrchestrator_MissingRegistryEntry_NoPanic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Alpha should still respond; ghost should be absent.
 	for _, r := range results {
 		if r.CarrierID == "ghost" {
 			t.Fatal("ghost carrier (no adapter) should not appear in results")
@@ -284,8 +260,6 @@ func TestOrchestrator_MissingRegistryEntry_NoPanic(t *testing.T) {
 		t.Fatal("alpha should still respond when ghost is missing from registry")
 	}
 }
-
-// ---- Benchmark (task 4.8) --------------------------------------------------
 
 func BenchmarkOrchestrator_GetQuotes_TwoCarriers(b *testing.B) {
 	alpha := makeCarrier("alpha", []domain.CoverageLine{domain.CoverageLineAuto}, defaultCfg())
@@ -324,7 +298,7 @@ func BenchmarkOrchestrator_GetQuotes_TwoCarriers(b *testing.B) {
 		Metrics:  fix.metrics,
 		Cfg:      orchestrator.Config{HedgePollInterval: 5 * time.Millisecond},
 		Log:      discardLog,
-		Repo:     nil, // no repository in benchmarks
+		Repo:     nil,
 	})
 
 	req := domain.QuoteRequest{
