@@ -28,8 +28,6 @@ type DeltaResponse struct {
 	ValidForSeconds int `json:"valid_for_seconds"`
 }
 
-// deltaHTTPClient is the interface expected by the generic Register function.
-// HTTPCarrier.Post satisfies it when wrapped by deltaClient.
 type deltaHTTPClient struct {
 	carrier *HTTPCarrier
 }
@@ -79,8 +77,6 @@ func NewDeltaCarrier(cfg HTTPCarrierConfig, log *slog.Logger) *HTTPCarrier {
 	return NewHTTPCarrier("delta", cfg, log)
 }
 
-// RegisterDeltaCarrier wires a Delta HTTPCarrier into the adapter registry.
-// It returns a type-erased AdapterFunc ready for Registry.Register("delta", ...).
 func RegisterDeltaCarrier(carrier *HTTPCarrier) AdapterFunc {
 	return RegisterHTTPCarrier(carrier, "delta")
 }

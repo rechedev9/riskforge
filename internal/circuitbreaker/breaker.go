@@ -1,10 +1,5 @@
-// Package circuitbreaker provides a per-carrier 3-state circuit breaker
-// implemented with sync/atomic operations. The three states are:
-//
-//	Closed   (0) — normal operation; requests flow through.
-//	Open     (1) — tripped; requests are short-circuited immediately.
-//	HalfOpen (2) — probe state; exactly one request is allowed through.
-//
+// Package circuitbreaker provides a per-carrier circuit breaker
+// implemented with sync/atomic operations.
 // All methods are safe for concurrent use.
 package circuitbreaker
 
@@ -144,7 +139,6 @@ func (b *Breaker) executeClosed(ctx context.Context, fn func() error) error {
 		}
 		return err
 	}
-	// Success resets the failure counter.
 	b.failures.Store(0)
 	return nil
 }
@@ -158,7 +152,6 @@ func (b *Breaker) executeHalfOpen(ctx context.Context, fn func() error) error {
 	defer b.halfOpenInFlight.Store(0)
 
 	if err := fn(); err != nil {
-		// Probe failed — re-open immediately.
 		if b.cas(ports.CBStateHalfOpen, ports.CBStateOpen) {
 			b.openedAt.Store(time.Now().UnixNano())
 			b.successes.Store(0)
@@ -168,7 +161,6 @@ func (b *Breaker) executeHalfOpen(ctx context.Context, fn func() error) error {
 		return err
 	}
 
-	// Probe succeeded.
 	newSuccesses := b.successes.Add(1)
 	if newSuccesses >= int32(b.cfg.SuccessThreshold) {
 		if b.cas(ports.CBStateHalfOpen, ports.CBStateClosed) {
@@ -181,8 +173,6 @@ func (b *Breaker) executeHalfOpen(ctx context.Context, fn func() error) error {
 	return nil
 }
 
-// Compile-time assertion that Breaker satisfies the Execute/State interface
-// expected by the orchestrator.
 var _ interface {
 	Execute(context.Context, func() error) error
 	State() ports.CBState
