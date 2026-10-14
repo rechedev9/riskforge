@@ -13,11 +13,8 @@ import (
 	"github.com/rechedev9/riskforge/internal/domain"
 )
 
-// devNull is a slog logger that discards all output; used in tests where log
-// output would clutter the test run.
 var devNull = slog.New(slog.NewTextHandler(io.Discard, nil))
 
-// makeRequest returns a minimal QuoteRequest for mock carrier tests.
 func makeRequest(requestID string) adapter.MockRequest {
 	return adapter.MockRequest{
 		RequestID:     requestID,
@@ -28,8 +25,6 @@ func makeRequest(requestID string) adapter.MockRequest {
 func TestMockCarrier_AlphaReturnsWithinLatencyBound(t *testing.T) {
 	t.Parallel()
 
-	// REQ-ADAPT-003: Alpha returns a valid result within 100ms (P99).
-	// Alpha config: BaseLatency=50ms, JitterMs=10, FailureRate=0.0
 	// Worst case latency = 50 + 10 = 60ms — well under 100ms.
 	mc := adapter.NewAlpha(devNull)
 	ctx := t.Context()
@@ -52,7 +47,6 @@ func TestMockCarrier_AlphaReturnsWithinLatencyBound(t *testing.T) {
 func TestMockCarrier_BetaFailureRateApproximatelyTenPercent(t *testing.T) {
 	t.Parallel()
 
-	// REQ-ADAPT-003: Beta returns ErrCarrierUnavailable at ~10% failure rate.
 	// Test with 500 calls; assert 3%–20% fail (wider bounds to avoid flakiness).
 	mc := adapter.NewBeta(devNull)
 	ctx := t.Context()
@@ -80,9 +74,6 @@ func TestMockCarrier_BetaFailureRateApproximatelyTenPercent(t *testing.T) {
 func TestMockCarrier_GammaReturnsInLatencyWindow(t *testing.T) {
 	t.Parallel()
 
-	// REQ-ADAPT-003: Gamma returns a valid result with latency in [750ms, 950ms].
-	// Gamma config: BaseLatency=800ms, JitterMs=50, FailureRate=0.0
-	// Valid range: [750ms, 850ms] nominal; use 700ms–950ms to handle system jitter.
 	mc := adapter.NewGamma(devNull)
 	ctx := t.Context()
 
@@ -93,8 +84,6 @@ func TestMockCarrier_GammaReturnsInLatencyWindow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("REQ-ADAPT-003 Gamma: unexpected error: %v", err)
 	}
-	// Lower bound: 800ms - 50ms jitter - 50ms system slack = 700ms
-	// Upper bound: 800ms + 50ms jitter + 100ms system slack = 950ms
 	const lower = 700 * time.Millisecond
 	const upper = 950 * time.Millisecond
 	if elapsed < lower || elapsed > upper {
@@ -108,8 +97,6 @@ func TestMockCarrier_GammaReturnsInLatencyWindow(t *testing.T) {
 func TestMockCarrier_CtxCancellationExitsWithin10ms(t *testing.T) {
 	t.Parallel()
 
-	// REQ-ADAPT-003: any mock carrier exits within 10ms of context cancellation.
-	// We cancel at 100ms while Gamma's nominal latency is 800ms.
 	tests := []struct {
 		name    string
 		carrier *adapter.MockCarrier
@@ -129,11 +116,7 @@ func TestMockCarrier_CtxCancellationExitsWithin10ms(t *testing.T) {
 			_, err := tc.carrier.Call(ctx, makeRequest("cancel-test"))
 			elapsed := time.Since(start)
 
-			// For fast carriers (Alpha, Beta), the call may succeed before
-			// cancellation — that is acceptable. For Gamma, it must cancel.
-			// Regardless of outcome: if ctx was cancelled, elapsed must be
-			// ≤ 110ms (cancel deadline + 10ms grace).
-			_ = err // may be nil (fast carrier) or ctx.Err() (slow carrier)
+			_ = err
 			if elapsed > 110*time.Millisecond {
 				t.Fatalf("%s: took %v after ctx cancel (want ≤110ms)", tc.name, elapsed)
 			}
@@ -144,7 +127,6 @@ func TestMockCarrier_CtxCancellationExitsWithin10ms(t *testing.T) {
 func TestMockCarrier_GammaCtxCancellationReturnsError(t *testing.T) {
 	t.Parallel()
 
-	// Gamma (800ms) will always be cancelled by a 100ms context.
 	mc := adapter.NewGamma(devNull)
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()

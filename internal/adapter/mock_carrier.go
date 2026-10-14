@@ -115,9 +115,6 @@ func (m *MockCarrier) Call(ctx context.Context, req MockRequest) (MockResponse, 
 		return MockResponse{}, domain.ErrCarrierUnavailable
 	}
 
-	// Produce a deterministic-ish premium based on carrier ID and request.
-	// The exact value is not important — tests verify range/existence, not a
-	// specific number.
 	premiumBase := int64(len(m.id)) * 10_000
 	resp := MockResponse{
 		CarrierID:        m.id,
