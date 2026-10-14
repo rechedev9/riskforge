@@ -13,23 +13,18 @@ import (
 	"github.com/rechedev9/riskforge/internal/ports"
 )
 
-// newRecorder returns a PrometheusRecorder using an isolated registry.
-// Each test gets its own registry so there is no global state contamination.
 func newRecorder(t *testing.T) *metrics.PrometheusRecorder {
 	t.Helper()
 	reg := prometheus.NewRegistry()
 	return metrics.New(reg)
 }
 
-// newRecorderWithRegistry returns both the recorder and the registry so tests
-// can gather metric families for assertion.
 func newRecorderWithRegistry(t *testing.T) (*metrics.PrometheusRecorder, *prometheus.Registry) {
 	t.Helper()
 	reg := prometheus.NewRegistry()
 	return metrics.New(reg), reg
 }
 
-// gaugeValue retrieves the current value of a GaugeVec label combination.
 func gaugeValue(t *testing.T, reg *prometheus.Registry, metricName string, labels ...string) float64 {
 	t.Helper()
 	mfs, err := reg.Gather()
@@ -50,7 +45,6 @@ func gaugeValue(t *testing.T, reg *prometheus.Registry, metricName string, label
 	return 0
 }
 
-// counterValue retrieves the current value of a counter with given label pairs.
 func counterValue(t *testing.T, reg *prometheus.Registry, metricName string, labels ...string) float64 {
 	t.Helper()
 	mfs, err := reg.Gather()
@@ -71,7 +65,6 @@ func counterValue(t *testing.T, reg *prometheus.Registry, metricName string, lab
 	return 0
 }
 
-// metricFamilyCount returns the number of metrics registered in the registry.
 func metricFamilyCount(t *testing.T, reg *prometheus.Registry) int {
 	t.Helper()
 	mfs, err := reg.Gather()
@@ -81,8 +74,6 @@ func metricFamilyCount(t *testing.T, reg *prometheus.Registry) int {
 	return len(mfs)
 }
 
-// labelsMatch checks that the metric's label pairs match the provided name=value pairs.
-// pairs must be provided in alternating name, value order.
 func labelsMatch(got []*dto.LabelPair, pairs []string) bool {
 	if len(pairs)%2 != 0 {
 		return false
@@ -103,7 +94,6 @@ func labelsMatch(got []*dto.LabelPair, pairs []string) bool {
 func TestPrometheusRecorder_SetCBState_SetsGaugeToExpectedValue(t *testing.T) {
 	t.Parallel()
 
-	// REQ-CB-004: SetCBState sets the gauge to the numeric state value.
 	tests := []struct {
 		name      string
 		state     ports.CBState
@@ -132,7 +122,6 @@ func TestPrometheusRecorder_SetCBState_SetsGaugeToExpectedValue(t *testing.T) {
 func TestPrometheusRecorder_RecordHedge_IncrementsCounter(t *testing.T) {
 	t.Parallel()
 
-	// REQ-HEDGE-006: RecordHedge increments hedge_requests_total by 1.
 	rec, reg := newRecorderWithRegistry(t)
 
 	rec.RecordHedge("alpha", "gamma")
@@ -142,7 +131,6 @@ func TestPrometheusRecorder_RecordHedge_IncrementsCounter(t *testing.T) {
 		t.Fatalf("hedge_requests_total{carrier_id=alpha,trigger_carrier=gamma} = %v, want 1", got)
 	}
 
-	// Second call increments to 2.
 	rec.RecordHedge("alpha", "gamma")
 	got = counterValue(t, reg, "hedge_requests_total", "carrier_id", "alpha", "trigger_carrier", "gamma")
 	if got != 2 {
@@ -153,7 +141,6 @@ func TestPrometheusRecorder_RecordHedge_IncrementsCounter(t *testing.T) {
 func TestPrometheusRecorder_RecordRateLimitRejection_IncrementsCounter(t *testing.T) {
 	t.Parallel()
 
-	// REQ-RL-003: RecordRateLimitRejection increments rate_limit_exceeded_total.
 	rec, reg := newRecorderWithRegistry(t)
 
 	rec.RecordRateLimitRejection("beta")
@@ -167,18 +154,14 @@ func TestPrometheusRecorder_RecordRateLimitRejection_IncrementsCounter(t *testin
 func TestPrometheusRecorder_AllEightMetricsRegisteredOnConstruction(t *testing.T) {
 	t.Parallel()
 
-	// REQ-CB-004/REQ-HEDGE-006/REQ-RL-003: all 8 metrics are registered without error.
 	reg := prometheus.NewRegistry()
-	// New should not panic. If it does, the test will fail with a panic.
 	metrics.New(reg)
 
-	// Gather should yield exactly 8 metric families.
 	mfs, err := reg.Gather()
 	if err != nil {
 		t.Fatalf("Gather after New: %v", err)
 	}
 
-	// Expected metric names.
 	expectedNames := map[string]bool{
 		"carrier_circuit_breaker_state":         false,
 		"carrier_p95_latency_ms":                false,
@@ -197,7 +180,6 @@ func TestPrometheusRecorder_AllEightMetricsRegisteredOnConstruction(t *testing.T
 	}
 
 	// After gather with no observations, histogram/gauge families may not appear.
-	// Trigger an observation on each metric to ensure they register.
 	rec, reg2 := newRecorderWithRegistry(t)
 	rec.SetCBState("test", ports.CBStateClosed)
 	rec.SetP95Latency("test", 50.0)
@@ -216,7 +198,6 @@ func TestPrometheusRecorder_AllEightMetricsRegisteredOnConstruction(t *testing.T
 func TestPrometheusRecorder_LabelCardinality_ThreeCarriersDistinct(t *testing.T) {
 	t.Parallel()
 
-	// REQ-CB-004: three carrier IDs produce three distinct time series per counter.
 	rec, reg := newRecorderWithRegistry(t)
 
 	carriers := []string{"alpha", "beta", "gamma"}
@@ -245,7 +226,6 @@ func TestPrometheusRecorder_LabelCardinality_ThreeCarriersDistinct(t *testing.T)
 func TestPrometheusRecorder_RecordCBTransition_IncrementsCounter(t *testing.T) {
 	t.Parallel()
 
-	// REQ-CB-004: RecordCBTransition increments circuit_breaker_transitions_total.
 	rec, reg := newRecorderWithRegistry(t)
 
 	rec.RecordCBTransition("alpha", ports.CBStateClosed, ports.CBStateOpen)
