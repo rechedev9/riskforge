@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -18,13 +19,13 @@ const maxResponseBytes = 10 << 20 // 10 MiB
 // HTTPCarrierConfig configures the HTTP carrier client.
 type HTTPCarrierConfig struct {
 	// BaseURL is the carrier API root (e.g. "https://api.delta-insurance.com").
-	// Must not have a trailing slash.
+	// A trailing slash is removed when the carrier is constructed.
 	BaseURL string
 	// APIKey is sent as the X-API-Key request header.
 	APIKey string
 	// MaxRetries is the number of retry attempts after the initial failure.
-	// Default: 3. Set to 0 to disable retries.
-	MaxRetries int
+	// Nil uses 3. A pointer to 0 disables retries.
+	MaxRetries *int
 	// RetryDelay is the base delay before the first retry. Each subsequent
 	// retry doubles the delay (exponential backoff). Default: 100ms.
 	RetryDelay time.Duration
@@ -34,9 +35,15 @@ type HTTPCarrierConfig struct {
 
 func (c *HTTPCarrierConfig) withDefaults() HTTPCarrierConfig {
 	out := *c
-	if out.MaxRetries <= 0 {
-		out.MaxRetries = 3
+	out.BaseURL = strings.TrimRight(out.BaseURL, "/")
+	retries := 3
+	if out.MaxRetries != nil {
+		retries = *out.MaxRetries
+		if retries < 0 {
+			retries = 0
+		}
 	}
+	out.MaxRetries = &retries
 	if out.RetryDelay <= 0 {
 		out.RetryDelay = 100 * time.Millisecond
 	}
@@ -81,7 +88,7 @@ func NewHTTPCarrier(id string, cfg HTTPCarrierConfig, log *slog.Logger) *HTTPCar
 //
 // ctx cancellation is honoured across all attempts.
 func (h *HTTPCarrier) Post(ctx context.Context, path string, body, out any) error {
-	url := strings.TrimRight(h.cfg.BaseURL, "/") + "/" + strings.TrimLeft(path, "/")
+	url := h.cfg.BaseURL + "/" + strings.TrimLeft(path, "/")
 
 	payload, err := json.Marshal(body)
 	if err != nil {
@@ -91,7 +98,8 @@ func (h *HTTPCarrier) Post(ctx context.Context, path string, body, out any) erro
 	delay := h.cfg.RetryDelay
 	lastErr := error(nil)
 
-	for attempt := 0; attempt <= h.cfg.MaxRetries; attempt++ {
+	maxRetries := *h.cfg.MaxRetries
+	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if attempt > 0 {
 			timer := time.NewTimer(delay)
 			select {
@@ -104,7 +112,7 @@ func (h *HTTPCarrier) Post(ctx context.Context, path string, body, out any) erro
 		}
 
 		attemptCtx, cancel := context.WithTimeout(ctx, h.cfg.Timeout)
-		statusCode, err := h.doOnce(attemptCtx, url, payload, out)
+		err := h.doOnce(attemptCtx, url, payload, out)
 		cancel()
 
 		if err == nil {
@@ -113,28 +121,36 @@ func (h *HTTPCarrier) Post(ctx context.Context, path string, body, out any) erro
 
 		// Do not retry on 4xx — these indicate a client-side problem that
 		// won't be resolved by retrying (bad request, auth failure, etc.).
-		if statusCode >= 400 && statusCode < 500 {
-			return fmt.Errorf("http_carrier %s: non-retryable status %d: %w", h.id, statusCode, err)
+		var statusErr *httpStatusError
+		if errors.As(err, &statusErr) && statusErr.status >= 400 && statusErr.status < 500 {
+			return fmt.Errorf("http_carrier %s: non-retryable status %d: %w", h.id, statusErr.status, err)
 		}
 
 		lastErr = err
 		h.log.Warn("http carrier attempt failed, will retry",
 			slog.String("carrier_id", h.id),
 			slog.Int("attempt", attempt+1),
-			slog.Int("max_retries", h.cfg.MaxRetries),
+			slog.Int("max_retries", maxRetries),
 			slog.String("error", err.Error()),
 		)
 	}
 
-	return fmt.Errorf("http_carrier %s: all %d attempts failed: %w", h.id, h.cfg.MaxRetries+1, lastErr)
+	return fmt.Errorf("http_carrier %s: all %d attempts failed: %w", h.id, maxRetries+1, lastErr)
 }
 
-// doOnce executes a single HTTP POST attempt. Returns (statusCode, error).
-// statusCode is 0 on network-level errors.
-func (h *HTTPCarrier) doOnce(ctx context.Context, url string, payload []byte, out any) (int, error) {
+type httpStatusError struct {
+	status int
+	detail string
+}
+
+func (e *httpStatusError) Error() string {
+	return fmt.Sprintf("status %d: %s", e.status, e.detail)
+}
+
+func (h *HTTPCarrier) doOnce(ctx context.Context, url string, payload []byte, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
 	if err != nil {
-		return 0, fmt.Errorf("build request: %w", err)
+		return fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if h.cfg.APIKey != "" {
@@ -143,19 +159,19 @@ func (h *HTTPCarrier) doOnce(ctx context.Context, url string, payload []byte, ou
 
 	resp, err := h.client.Do(req)
 	if err != nil {
-		return 0, fmt.Errorf("do request: %w", err)
+		return fmt.Errorf("do request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return resp.StatusCode, fmt.Errorf("status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return &httpStatusError{status: resp.StatusCode, detail: strings.TrimSpace(string(body))}
 	}
 
 	// Cap response body to prevent OOM from oversized carrier responses (SEC-5).
 	limited := io.LimitReader(resp.Body, maxResponseBytes)
 	if err := json.NewDecoder(limited).Decode(out); err != nil {
-		return resp.StatusCode, fmt.Errorf("decode response: %w", err)
+		return fmt.Errorf("decode response: %w", err)
 	}
-	return resp.StatusCode, nil
+	return nil
 }

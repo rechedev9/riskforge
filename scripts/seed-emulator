@@ -21,11 +21,11 @@ gcloud spanner databases execute-sql "$DB" --instance="$INSTANCE" --sql="
 INSERT INTO Carriers (CarrierId, Name, Code, IsActive, CreatedAt, UpdatedAt, Config)
 VALUES
   ('carrier-alpha', 'Alpha Insurance', 'ALPHA', true, PENDING_COMMIT_TIMESTAMP(), PENDING_COMMIT_TIMESTAMP(),
-   JSON '{\"TimeoutHint\":\"100ms\",\"FailureThreshold\":5,\"SuccessThreshold\":2,\"OpenTimeout\":\"30s\",\"HedgeMultiplier\":1.5,\"EMAWindowSize\":19,\"EMAWarmupObservations\":10,\"Priority\":1,\"RateLimit\":{\"TokensPerSecond\":100,\"Burst\":10}}'),
+   JSON '{\"TimeoutHint\":100000000,\"FailureThreshold\":5,\"SuccessThreshold\":2,\"OpenTimeout\":30000000000,\"HedgeMultiplier\":1.5,\"EMAWindowSize\":19,\"EMAWarmupObservations\":10,\"Priority\":1,\"RateLimit\":{\"TokensPerSecond\":100,\"Burst\":10},\"BaseURL\":\"http://carrier-alpha.invalid\",\"APIKey\":\"\"}'),
   ('carrier-beta', 'Beta Insurance', 'BETA', true, PENDING_COMMIT_TIMESTAMP(), PENDING_COMMIT_TIMESTAMP(),
-   JSON '{\"TimeoutHint\":\"200ms\",\"FailureThreshold\":5,\"SuccessThreshold\":2,\"OpenTimeout\":\"30s\",\"HedgeMultiplier\":1.5,\"EMAWindowSize\":19,\"EMAWarmupObservations\":10,\"Priority\":2,\"RateLimit\":{\"TokensPerSecond\":50,\"Burst\":5}}'),
+   JSON '{\"TimeoutHint\":200000000,\"FailureThreshold\":5,\"SuccessThreshold\":2,\"OpenTimeout\":30000000000,\"HedgeMultiplier\":1.5,\"EMAWindowSize\":19,\"EMAWarmupObservations\":10,\"Priority\":2,\"RateLimit\":{\"TokensPerSecond\":50,\"Burst\":5},\"BaseURL\":\"http://carrier-beta.invalid\",\"APIKey\":\"\"}'),
   ('carrier-gamma', 'Gamma Insurance', 'GAMMA', true, PENDING_COMMIT_TIMESTAMP(), PENDING_COMMIT_TIMESTAMP(),
-   JSON '{\"TimeoutHint\":\"800ms\",\"FailureThreshold\":5,\"SuccessThreshold\":2,\"OpenTimeout\":\"30s\",\"HedgeMultiplier\":1.5,\"EMAWindowSize\":19,\"EMAWarmupObservations\":10,\"Priority\":3,\"RateLimit\":{\"TokensPerSecond\":100,\"Burst\":10}}')
+   JSON '{\"TimeoutHint\":800000000,\"FailureThreshold\":5,\"SuccessThreshold\":2,\"OpenTimeout\":30000000000,\"HedgeMultiplier\":1.5,\"EMAWindowSize\":19,\"EMAWarmupObservations\":10,\"Priority\":3,\"RateLimit\":{\"TokensPerSecond\":100,\"Burst\":10},\"BaseURL\":\"http://carrier-gamma.invalid\",\"APIKey\":\"\"}')
 "
 
 gcloud spanner databases execute-sql "$DB" --instance="$INSTANCE" --sql="

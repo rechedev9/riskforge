@@ -2,7 +2,9 @@ package adapter
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/rechedev9/riskforge/internal/domain"
@@ -80,9 +82,31 @@ func NewDeltaCarrier(cfg HTTPCarrierConfig, log *slog.Logger) *HTTPCarrier {
 // RegisterDeltaCarrier wires a Delta HTTPCarrier into the adapter registry.
 // It returns a type-erased AdapterFunc ready for Registry.Register("delta", ...).
 func RegisterDeltaCarrier(carrier *HTTPCarrier) AdapterFunc {
+	return RegisterHTTPCarrier(carrier, "delta")
+}
+
+// RegisterHTTPCarrier wires an HTTPCarrier that speaks the Delta quote protocol
+// under the given carrier ID.
+func RegisterHTTPCarrier(carrier *HTTPCarrier, carrierID string) AdapterFunc {
 	return Register[DeltaRequest, DeltaResponse](
 		&deltaAdapter{},
 		&deltaHTTPClient{carrier: carrier},
-		"delta",
+		carrierID,
 	)
+}
+
+// NewCarrierAdapter registers the HTTP quote adapter described by c.Config.
+// Carriers loaded from storage must set BaseURL; the in-process fallback set
+// does not use this function.
+func NewCarrierAdapter(c domain.Carrier, log *slog.Logger) (AdapterFunc, error) {
+	base := strings.TrimSpace(c.Config.BaseURL)
+	if base == "" {
+		return nil, fmt.Errorf("carrier %s: config BaseURL is required", c.ID)
+	}
+	hc := NewHTTPCarrier(c.ID, HTTPCarrierConfig{
+		BaseURL: base,
+		APIKey:  c.Config.APIKey,
+		Timeout: c.Config.TimeoutHint,
+	}, log)
+	return RegisterHTTPCarrier(hc, c.ID), nil
 }
