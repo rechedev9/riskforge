@@ -1,6 +1,3 @@
-# -----------------------------------------------------------------------------
-# Enable VPC Access API
-# -----------------------------------------------------------------------------
 
 resource "google_project_service" "vpcaccess" {
   project            = var.project_id
@@ -8,19 +5,11 @@ resource "google_project_service" "vpcaccess" {
   disable_on_destroy = false
 }
 
-# -----------------------------------------------------------------------------
-# VPC Network
-# -----------------------------------------------------------------------------
-
 resource "google_compute_network" "vpc" {
   name                    = "appetite-engine-vpc-${var.environment}"
   project                 = var.project_id
   auto_create_subnetworks = false
 }
-
-# -----------------------------------------------------------------------------
-# Subnet (/28 for VPC connector)
-# -----------------------------------------------------------------------------
 
 resource "google_compute_subnetwork" "connector_subnet" {
   name          = "vpc-connector-subnet-${var.environment}"
@@ -29,10 +18,6 @@ resource "google_compute_subnetwork" "connector_subnet" {
   network       = google_compute_network.vpc.id
   project       = var.project_id
 }
-
-# -----------------------------------------------------------------------------
-# VPC Access Connector
-# -----------------------------------------------------------------------------
 
 resource "google_vpc_access_connector" "connector" {
   name    = "vpc-connector-${var.environment}"
@@ -50,11 +35,6 @@ resource "google_vpc_access_connector" "connector" {
   depends_on = [google_project_service.vpcaccess]
 }
 
-# -----------------------------------------------------------------------------
-# Firewall Rules (C2)
-# -----------------------------------------------------------------------------
-
-# Deny all ingress — lowest-priority default; all specific allows above override this.
 resource "google_compute_firewall" "deny_all_ingress" {
   name      = "deny-all-ingress-${var.environment}"
   network   = google_compute_network.vpc.id
@@ -69,7 +49,6 @@ resource "google_compute_firewall" "deny_all_ingress" {
   source_ranges = ["0.0.0.0/0"]
 }
 
-# Deny all egress — lowest-priority default.
 resource "google_compute_firewall" "deny_all_egress" {
   name      = "deny-all-egress-${var.environment}"
   network   = google_compute_network.vpc.id
@@ -84,7 +63,6 @@ resource "google_compute_firewall" "deny_all_egress" {
   destination_ranges = ["0.0.0.0/0"]
 }
 
-# Allow intra-subnet traffic (VPC connector instances communicating).
 resource "google_compute_firewall" "allow_internal" {
   name      = "allow-internal-${var.environment}"
   network   = google_compute_network.vpc.id
@@ -140,11 +118,8 @@ resource "google_compute_firewall" "allow_gcp_apis" {
   destination_ranges = ["199.36.153.8/30"]
 }
 
-# -----------------------------------------------------------------------------
-# Cloud Armor Security Policy (M1 — placeholder; not yet attached to a load balancer)
 # Attachment requires a Global External Application Load Balancer.
 # Track as follow-up change: glb-cloud-armor
-# -----------------------------------------------------------------------------
 
 resource "google_compute_security_policy" "rate_limit" {
   name    = "appetite-engine-rate-limit-${var.environment}"

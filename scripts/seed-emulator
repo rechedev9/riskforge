@@ -2,7 +2,6 @@
 set -euo pipefail
 
 # Seed the Spanner emulator with demo carriers and appetite rules.
-# Requires: SPANNER_EMULATOR_HOST set (e.g., localhost:9010)
 
 export SPANNER_EMULATOR_HOST="${SPANNER_EMULATOR_HOST:-localhost:9010}"
 PROJECT="riskforge-dev"
@@ -11,7 +10,6 @@ DB="test-db"
 
 echo "Seeding Spanner emulator at $SPANNER_EMULATOR_HOST..."
 
-# Use gcloud to execute DML
 gcloud config configurations create emulator 2>/dev/null || true
 gcloud config set auth/disable_credentials true
 gcloud config set project "$PROJECT"
