@@ -14,8 +14,6 @@ import (
 	"github.com/rechedev9/riskforge/internal/domain"
 )
 
-// newRegistry builds a Registry pre-populated with real MockCarrier adapters
-// for the given carrier IDs.
 func newRegistryWithMocks(t *testing.T, ids ...string) *adapter.Registry {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -34,7 +32,6 @@ func newRegistryWithMocks(t *testing.T, ids ...string) *adapter.Registry {
 func TestRegistry_GetReturnsCorrectAdapterFunc(t *testing.T) {
 	t.Parallel()
 
-	// REQ-ADAPT-001: Registry.Get returns the AdapterFunc registered for the carrier ID.
 	tests := []struct {
 		name       string
 		registerID string
@@ -63,8 +60,6 @@ func TestRegistry_GetReturnsCorrectAdapterFunc(t *testing.T) {
 func TestRegistry_AdapterFuncRoundTrip(t *testing.T) {
 	t.Parallel()
 
-	// REQ-ADAPT-002: type-erased AdapterFunc round-trips QuoteRequest → MockRequest → MockResponse → QuoteResult.
-	// result.CarrierID must match the registered key.
 	tests := []struct {
 		name      string
 		carrierID string
@@ -120,7 +115,6 @@ func TestRegistry_AdapterFuncRoundTrip(t *testing.T) {
 func TestRegistry_GetUnknownCarrierReturnsFalse(t *testing.T) {
 	t.Parallel()
 
-	// REQ-ADAPT-004: Registry.Get on unknown carrier returns (nil, false).
 	reg := newRegistryWithMocks(t, "alpha")
 	fn, ok := reg.Get("nonexistent")
 	if ok {
@@ -134,8 +128,6 @@ func TestRegistry_GetUnknownCarrierReturnsFalse(t *testing.T) {
 func TestRegistry_ConcurrentAdapterInvocations_NoContamination(t *testing.T) {
 	t.Parallel()
 
-	// REQ-ADAPT-004: two adapters with different internal state can be retrieved
-	// and invoked concurrently without cross-contamination of results.
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	reg := adapter.NewRegistry()
 
