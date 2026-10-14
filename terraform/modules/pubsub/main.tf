@@ -79,28 +79,24 @@ resource "google_pubsub_subscription" "appetite_events_dlq_pull" {
   }
 }
 
-# API SA can publish to the main topic
 resource "google_pubsub_topic_iam_member" "api_publisher" {
   topic  = google_pubsub_topic.appetite_events.name
   role   = "roles/pubsub.publisher"
   member = "serviceAccount:${var.api_sa_email}"
 }
 
-# Worker SA can subscribe to the push subscription
 resource "google_pubsub_subscription_iam_member" "worker_subscriber" {
   subscription = google_pubsub_subscription.appetite_events_push.name
   role         = "roles/pubsub.subscriber"
   member       = "serviceAccount:${var.worker_sa_email}"
 }
 
-# Pub/Sub service agent can publish to DLQ topic (for dead letter forwarding)
 resource "google_pubsub_topic_iam_member" "dlq_publisher" {
   topic  = google_pubsub_topic.appetite_events_dlq.name
   role   = "roles/pubsub.publisher"
   member = local.pubsub_service_agent
 }
 
-# Pub/Sub service agent can subscribe to push subscription (for dead letter forwarding)
 resource "google_pubsub_subscription_iam_member" "dlq_subscriber" {
   subscription = google_pubsub_subscription.appetite_events_push.name
   role         = "roles/pubsub.subscriber"

@@ -13,7 +13,6 @@ resource "google_storage_bucket" "documents" {
     enabled = true
   }
 
-  # Delete non-current versions after 90 days
   lifecycle_rule {
     condition {
       age        = 90
@@ -57,7 +56,6 @@ resource "google_storage_bucket_iam_member" "worker_objectuser" {
   member = "serviceAccount:${var.worker_sa_email}"
 }
 
-# H5: Scope Artifact Registry access to the runtime SAs only.
 # Both API and Worker SAs need to pull their own images at Cloud Run startup.
 resource "google_artifact_registry_repository_iam_member" "api_reader" {
   repository = google_artifact_registry_repository.docker.name
