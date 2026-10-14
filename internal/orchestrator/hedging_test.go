@@ -11,8 +11,6 @@ import (
 	"github.com/rechedev9/riskforge/internal/testutil"
 )
 
-// makeTracker is a test helper that builds an EMATracker with the given
-// seed and CarrierConfig values.
 func makeTracker(t *testing.T, seed time.Duration, alpha float64, warmup int, multiplier float64) *orchestrator.EMATracker {
 	t.Helper()
 	rec := testutil.NewNoopRecorder()
@@ -30,7 +28,6 @@ func TestEMATracker_InitialisedToTwiceSeed(t *testing.T) {
 	seed := 100 * time.Millisecond
 	tracker := makeTracker(t, seed, 0.1, 10, 1.5)
 
-	// P95 should be seeded to 2 × 100ms = 200ms.
 	wantP95 := float64(seed.Milliseconds()) * 2.0
 	if got := tracker.P95(); got != wantP95 {
 		t.Fatalf("expected P95 = %v ms, got %v ms", wantP95, got)
@@ -41,7 +38,6 @@ func TestEMATracker_P95ConvergesAfterObservations(t *testing.T) {
 	t.Parallel()
 
 	seed := 200 * time.Millisecond
-	// Use a high alpha for faster convergence in tests.
 	tracker := makeTracker(t, seed, 0.3, 0, 1.5)
 
 	target := 50 * time.Millisecond
@@ -51,7 +47,6 @@ func TestEMATracker_P95ConvergesAfterObservations(t *testing.T) {
 
 	got := tracker.P95()
 	targetMs := float64(target.Milliseconds())
-	// After 30 records with alpha=0.3, P95 should be within 5 ms of target.
 	if math.Abs(got-targetMs) > 5.0 {
 		t.Fatalf("P95 did not converge: got %v ms, want ~%v ms (±5ms)", got, targetMs)
 	}
@@ -61,12 +56,10 @@ func TestEMATracker_ZeroAlphaDefaultsToPointOne(t *testing.T) {
 	t.Parallel()
 
 	seed := 200 * time.Millisecond
-	// Both alpha=0 and windowSize=0 — should default alpha to 0.1.
 	tracker := makeTracker(t, seed, 0, 0, 1.5)
 
 	seedP95 := tracker.P95()
 
-	// Record observations well below the seed to drive convergence.
 	for i := 0; i < 30; i++ {
 		tracker.Record(50 * time.Millisecond)
 	}
@@ -75,8 +68,6 @@ func TestEMATracker_ZeroAlphaDefaultsToPointOne(t *testing.T) {
 	if got >= seedP95 {
 		t.Fatalf("P95 did not move from seed: seed=%v ms, got=%v ms", seedP95, got)
 	}
-	// With default alpha=0.1 and 30 observations at 50ms, P95 should drop
-	// significantly from the 400ms seed toward 50ms.
 	if got > 200 {
 		t.Fatalf("P95 barely moved: got %v ms, expected well below 200 ms", got)
 	}
@@ -93,7 +84,6 @@ func TestEMATracker_HedgeThresholdReturnMaxFloat64DuringWarmup(t *testing.T) {
 		t.Fatalf("expected MaxFloat64 during warm-up, got %v", got)
 	}
 
-	// 9 observations — still in warm-up.
 	for i := 0; i < 9; i++ {
 		tracker.Record(50 * time.Millisecond)
 	}
